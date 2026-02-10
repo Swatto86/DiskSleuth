@@ -57,6 +57,10 @@ pub struct AppState {
     pub scan_duration: Option<Duration>,
     /// True if the most recent scan was cancelled (partial results).
     pub scan_was_cancelled: bool,
+    /// True if the scanner is using MFT direct reader (Tier 1).
+    pub scan_is_mft: bool,
+    /// True if the process is running with admin privileges.
+    pub scan_is_elevated: bool,
 
     // ── Results ────────────────────────────────────────
     /// The completed scan tree (set once scan finishes).
@@ -103,6 +107,8 @@ impl AppState {
             scan_error_count: 0,
             scan_duration: None,
             scan_was_cancelled: false,
+            scan_is_mft: false,
+            scan_is_elevated: false,
             tree: None,
             live_tree: None,
             visible_rows: Vec::new(),
@@ -129,6 +135,8 @@ impl AppState {
         self.scan_error_count = 0;
         self.scan_duration = None;
         self.scan_was_cancelled = false;
+        self.scan_is_mft = false;
+        self.scan_is_elevated = false;
         self.scan_errors.clear();
         self.tree = None;
         self.visible_rows.clear();
@@ -174,6 +182,10 @@ impl AppState {
         while let Ok(msg) = handle.progress_rx.try_recv() {
             repaint = true;
             match msg {
+                ScanProgress::ScanTier { is_mft, is_elevated } => {
+                    self.scan_is_mft = is_mft;
+                    self.scan_is_elevated = is_elevated;
+                }
                 ScanProgress::Update {
                     files_found,
                     dirs_found,

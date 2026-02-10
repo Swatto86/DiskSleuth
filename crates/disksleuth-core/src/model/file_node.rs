@@ -72,6 +72,10 @@ pub struct FileNode {
     /// Pre-computed percentage of the parent's size (0.0–100.0).
     /// Calculated in the aggregation pass so rendering doesn't repeat the division.
     pub percent_of_parent: f32,
+
+    /// `true` if this node could not be read (e.g. access denied).
+    /// The node stays in the tree so users can see where errors occurred.
+    pub is_error: bool,
 }
 
 impl FileNode {
@@ -88,6 +92,7 @@ impl FileNode {
             descendant_count: 0,
             modified: None,
             percent_of_parent: 0.0,
+            is_error: false,
         }
     }
 
@@ -104,6 +109,24 @@ impl FileNode {
             descendant_count: 0,
             modified: None,
             percent_of_parent: 0.0,
+            is_error: false,
+        }
+    }
+
+    /// Create an error placeholder node (e.g. access denied directory).
+    pub fn new_error(name: CompactString, is_dir: bool, parent: Option<NodeIndex>) -> Self {
+        Self {
+            name,
+            size: 0,
+            allocated_size: 0,
+            is_dir,
+            parent,
+            first_child: None,
+            next_sibling: None,
+            descendant_count: 0,
+            modified: None,
+            percent_of_parent: 0.0,
+            is_error: true,
         }
     }
 }

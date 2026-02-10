@@ -66,9 +66,34 @@ pub fn scan_parallel(
             Ok(e) => e,
             Err(err) => {
                 error_count += 1;
+                // jwalk errors are typically access-denied on directories.
+                // Extract what path info we can from the error.
+                let err_path = err.path().map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
                 let msg = format!("{err}");
+
+                // Add an error placeholder node if we can determine the parent.
+                if let Some(entry_path) = err.path() {
+                    if let Some(parent_path) = entry_path.parent() {
+                        let parent_idx = dir_map.get(&parent_path.to_path_buf()).copied();
+                        if let Some(pidx) = parent_idx {
+                            let name = entry_path.file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_else(|| "<access denied>".to_string());
+                            let error_node = FileNode::new_error(
+                                CompactString::new(&name),
+                                true, // assume dir since jwalk only errors on dir reads
+                                Some(pidx),
+                            );
+                            let mut tree = live_tree.write();
+                            let idx = tree.add_node(error_node);
+                            tree.add_child(pidx, idx);
+                        }
+                    }
+                }
+
                 let _ = progress_tx.send(ScanProgress::Error {
-                    path: String::new(),
+                    path: err_path,
                     message: msg,
                 });
                 continue;
@@ -111,7 +136,7 @@ pub fn scan_parallel(
             dir_map.insert(path.clone(), dir_idx);
             dirs_found += 1;
         } else {
-            let (size, modified) = match std::fs::metadata(&path) {
+            let (size, modified) = match std::fs::symlink_metadata(&path) {
                 Ok(meta) => {
                     let sz = meta.len();
                     let mod_time = meta.modified().ok();
@@ -119,6 +144,17 @@ pub fn scan_parallel(
                 }
                 Err(err) => {
                     error_count += 1;
+                    // Create an error placeholder node so the user can see what failed.
+                    let error_node = FileNode::new_error(
+                        CompactString::new(&file_name),
+                        false,
+                        Some(parent_idx),
+                    );
+                    {
+                        let mut tree = live_tree.write();
+                        let idx = tree.add_node(error_node);
+                        tree.add_child(parent_idx, idx);
+                    }
                     let _ = progress_tx.send(ScanProgress::Error {
                         path: path.to_string_lossy().to_string(),
                         message: format!("{err}"),
