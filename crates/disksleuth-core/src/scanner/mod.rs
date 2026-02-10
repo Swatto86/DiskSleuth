@@ -71,12 +71,38 @@ pub fn start_scan(root_path: PathBuf) -> ScanHandle {
         .spawn(move || {
             info!("Starting scan of {}", root_path.display());
 
+            let is_elevated = crate::platform::is_elevated();
+
             // Tier selection: try MFT first, fall back to parallel walk.
             if mft::is_mft_available(&root_path) {
                 info!("Using MFT direct reader (Tier 1)");
-                mft::scan_mft(root_path, progress_tx, cancel_clone, tree_clone);
+                let _ = progress_tx.send(ScanProgress::ScanTier {
+                    is_mft: true,
+                    is_elevated,
+                });
+                mft::scan_mft(
+                    root_path.clone(),
+                    progress_tx.clone(),
+                    cancel_clone.clone(),
+                    tree_clone.clone(),
+                );
+
+                // If the MFT scan failed (tree is empty), fall back to Tier 2.
+                let tree_empty = tree_clone.read().len() == 0;
+                if tree_empty && !cancel_clone.load(Ordering::Relaxed) {
+                    info!("MFT scan produced no results — falling back to parallel walk (Tier 2)");
+                    let _ = progress_tx.send(ScanProgress::ScanTier {
+                        is_mft: false,
+                        is_elevated,
+                    });
+                    parallel::scan_parallel(root_path, progress_tx, cancel_clone, tree_clone);
+                }
             } else {
                 info!("Using parallel directory walker (Tier 2)");
+                let _ = progress_tx.send(ScanProgress::ScanTier {
+                    is_mft: false,
+                    is_elevated,
+                });
                 parallel::scan_parallel(root_path, progress_tx, cancel_clone, tree_clone);
             }
         })

@@ -181,17 +181,22 @@ fn render_tree_rows(
 
                 // Tooltip with full name when hovered (useful for truncated names).
                 if row_response.hovered() {
+                    let tip_text = if node.is_error {
+                        format!("{}\n⚠ Access denied", node.name)
+                    } else {
+                        format!(
+                            "{}\n{} — {:.1}%",
+                            node.name,
+                            format_size(node.size),
+                            node.percent_of_parent,
+                        )
+                    };
                     egui::show_tooltip_at_pointer(
                         ui.ctx(),
                         ui.layer_id(),
                         ui.id().with(("tree_tip", row_idx)),
                         |ui| {
-                            ui.label(format!(
-                                "{}\n{} — {:.1}%",
-                                node.name,
-                                format_size(node.size),
-                                node.percent_of_parent,
-                            ));
+                            ui.label(tip_text);
                         },
                     );
                 }
@@ -225,12 +230,13 @@ fn render_tree_rows(
                     );
                 }
 
-                // Icon.
-                let icon = if node.is_dir { "📁" } else { "📄" };
-                let icon_color = if node.is_dir {
-                    theme.folder_icon
+                // Icon — error nodes get a warning icon.
+                let (icon, icon_color) = if node.is_error {
+                    ("⚠", theme.warning)
+                } else if node.is_dir {
+                    ("📁", theme.folder_icon)
                 } else {
-                    theme.file_icon
+                    ("📄", theme.file_icon)
                 };
                 painter.text(
                     egui::pos2(text_x, text_y),
@@ -241,17 +247,22 @@ fn render_tree_rows(
                 );
 
                 // File/directory name — rendered with proper text clipping.
-                // Uses egui's layout_no_wrap + clip rect for clean truncation.
+                // Error nodes display in muted/warning colour.
                 let name_x = text_x + 20.0;
                 let right_area_start = row_rect.right() - 300.0;
                 let max_name_w = (right_area_start - name_x - 4.0).max(20.0);
                 let name_str = node.name.as_str();
 
                 let name_font = egui::FontId::proportional(13.0);
+                let name_color = if node.is_error {
+                    theme.text_muted
+                } else {
+                    theme.text_primary
+                };
                 let name_galley = painter.layout_no_wrap(
                     name_str.to_string(),
                     name_font,
-                    theme.text_primary,
+                    name_color,
                 );
 
                 // If the text fits, draw it directly. Otherwise, clip and add ellipsis.
@@ -260,7 +271,7 @@ fn render_tree_rows(
                     painter.galley(
                         egui::pos2(name_x, text_y - name_galley.size().y / 2.0),
                         name_galley,
-                        theme.text_primary,
+                        name_color,
                     );
                 } else {
                     // Clip the name galley to the available width.
@@ -273,7 +284,7 @@ fn render_tree_rows(
                     painter.galley(
                         egui::pos2(name_x, text_y - name_galley.size().y / 2.0),
                         name_galley,
-                        theme.text_primary,
+                        name_color,
                     );
                     painter.set_clip_rect(prev_clip);
 

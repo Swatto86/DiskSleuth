@@ -18,6 +18,13 @@ pub enum ScanCommand {
 /// carry only lightweight counters and status flags.
 #[derive(Debug)]
 pub enum ScanProgress {
+    /// Notifies the UI which scanner tier is being used.
+    ScanTier {
+        /// `true` = MFT direct reader (Tier 1, admin), `false` = parallel walk (Tier 2).
+        is_mft: bool,
+        /// `true` if the process is running with admin privileges.
+        is_elevated: bool,
+    },
     /// Periodic update with running totals.
     Update {
         files_found: u64,

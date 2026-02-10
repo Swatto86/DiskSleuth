@@ -42,10 +42,27 @@ pub fn details_panel(ui: &mut Ui, state: &AppState, theme: &DiskSleuthTheme) {
     let full_path = tree.full_path(selected);
 
     ui.heading(
-        egui::RichText::new(if node.is_dir { "📁" } else { "📄" })
+        egui::RichText::new(if node.is_error {
+            "⚠"
+        } else if node.is_dir {
+            "📁"
+        } else {
+            "📄"
+        })
             .size(16.0),
     );
     ui.add_space(2.0);
+
+    // Error badge.
+    if node.is_error {
+        ui.label(
+            egui::RichText::new("Access denied — contents could not be read")
+                .size(11.0)
+                .color(theme.warning)
+                .italics(),
+        );
+        ui.add_space(2.0);
+    }
 
     // Name.
     ui.label(

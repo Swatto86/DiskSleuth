@@ -132,6 +132,11 @@ disksleuth/
 - [x] Removed duplicate "Scan Selected Drive" button (toolbar Scan button is the single entry point)
 - [x] Auto-scan OS drive on startup (reads `%SystemDrive%`, defaults to `C:`)
 - [x] Treemap navigation buttons fixed (back/forward/up now correctly track history from initial root state)
+- [x] Access-denied handling (`FileNode.is_error` — error nodes shown in tree with ⚠ icon, warning colour, and tooltip; details panel shows "Access denied" badge)
+- [x] Hidden & system files included (both scanners enumerate all files regardless of Windows attributes)
+- [x] Symlink safety (parallel walker uses `symlink_metadata` + `follow_links(false)` — no loops, no double-counting)
+- [x] MFT-to-parallel fallback (if MFT scan produces no results, automatically retries with Tier 2 parallel walk)
+- [x] Scan tier indicator in status bar (shows "MFT" or "Walk" during and after scan; admin badge in toolbar)
 - [ ] Scan history / comparison
 - [ ] Custom folder scan (not just whole drives)
 - [ ] File deletion with recycle bin support

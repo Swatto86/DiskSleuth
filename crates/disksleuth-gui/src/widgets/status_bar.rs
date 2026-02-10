@@ -20,6 +20,16 @@ pub fn status_bar(ui: &mut Ui, state: &AppState, theme: &DiskSleuthTheme) {
                 // Animated spinner.
                 ui.spinner();
 
+                // Scan tier badge.
+                let tier_label = if state.scan_is_mft { "MFT" } else { "Walk" };
+                let tier_color = if state.scan_is_mft { theme.accent } else { theme.text_muted };
+                ui.label(
+                    egui::RichText::new(tier_label)
+                        .size(11.0)
+                        .color(tier_color),
+                );
+                ui.separator();
+
                 // Truncate current path for display.
                 let display_path = truncate_path(&state.scan_current_path, 60);
                 ui.label(
@@ -86,6 +96,16 @@ pub fn status_bar(ui: &mut Ui, state: &AppState, theme: &DiskSleuthTheme) {
                         egui::RichText::new(status_text)
                             .size(12.0)
                             .color(status_color),
+                    );
+
+                    // Scan tier badge.
+                    ui.separator();
+                    let tier_label = if state.scan_is_mft { "MFT" } else { "Walk" };
+                    let tier_color = if state.scan_is_mft { theme.accent } else { theme.text_muted };
+                    ui.label(
+                        egui::RichText::new(tier_label)
+                            .size(11.0)
+                            .color(tier_color),
                     );
 
                     ui.separator();
