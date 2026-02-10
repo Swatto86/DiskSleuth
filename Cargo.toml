@@ -44,8 +44,8 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["Swatto"]
-repository = "https://github.com/Swatto/disksleuth"
-homepage = "https://github.com/Swatto/disksleuth"
+repository = "https://github.com/Swatto86/DiskSleuth"
+homepage = "https://github.com/Swatto86/DiskSleuth"
 readme = "README.md"
 keywords = ["disk", "storage", "analyzer", "windows", "treemap"]
 categories = ["filesystem", "visualization"]
@@ -58,6 +58,10 @@ description = "A fast, visual disk space analyser for Windows — featuring para
 repository.workspace = true
 license.workspace = true
 authors.workspace = true
+
+[[bin]]
+name = "DiskSleuth"
+path = "src/main.rs"
 
 [dependencies]
 disksleuth-gui = { path = "crates/disksleuth-gui" }

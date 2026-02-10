@@ -37,7 +37,7 @@ DiskSleuth scans your drives in parallel, displays results in an interactive tre
 ### Build & Run
 
 ```powershell
-git clone https://github.com/Swatto/disksleuth.git
+git clone https://github.com/Swatto86/DiskSleuth.git
 cd disksleuth
 
 # Release build (recommended — LTO, stripped, optimised)

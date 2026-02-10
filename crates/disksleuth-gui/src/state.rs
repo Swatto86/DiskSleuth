@@ -84,6 +84,7 @@ pub struct AppState {
     // ── UI state ───────────────────────────────────────
     pub tree_scroll_offset: f32,
     pub show_errors: bool,
+    pub show_about: bool,
     pub scan_errors: Vec<(String, String)>,
     pub context_menu_node: Option<NodeIndex>,
 }
@@ -119,6 +120,7 @@ impl AppState {
             treemap_forward: Vec::new(),
             tree_scroll_offset: 0.0,
             show_errors: false,
+            show_about: false,
             scan_errors: Vec::new(),
             context_menu_node: None,
         }

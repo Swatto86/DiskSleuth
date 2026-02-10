@@ -15,7 +15,10 @@ pub struct DiskSleuthApp {
 impl DiskSleuthApp {
     /// Create a new application instance.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // Apply the initial dark theme.
+        // Apply dark visuals immediately so the very first frame is dark.
+        cc.egui_ctx.set_visuals(egui::Visuals::dark());
+
+        // Apply the full DiskSleuth theme on top.
         let theme = DiskSleuthTheme::dark();
         theme.apply(&cc.egui_ctx);
 
@@ -40,6 +43,7 @@ impl DiskSleuthApp {
 
 impl eframe::App for DiskSleuthApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+
         // Process any pending scan messages before rendering.
         let _data_changed = self.state.process_scan_messages();
 
@@ -60,6 +64,77 @@ impl eframe::App for DiskSleuthApp {
                 widgets::toolbar::toolbar(ui, &mut self.state, &theme);
                 ui.add_space(4.0);
             });
+
+        // ── About dialog ──────────────────────────────────────────
+        let mut show_about = self.state.show_about;
+        egui::Window::new("About DiskSleuth")
+            .open(&mut show_about)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .fixed_size([340.0, 0.0])
+            .show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new("🔍 DiskSleuth")
+                            .size(24.0)
+                            .strong()
+                            .color(theme.accent),
+                    );
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                            .size(13.0)
+                            .color(theme.text_muted),
+                    );
+                    ui.add_space(12.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "A fast, visual disk space analyser for Windows.\n\
+                             Parallel scanning, SpaceSniffer-style treemap,\n\
+                             and an interactive tree view."
+                        )
+                        .size(12.0)
+                        .color(theme.text_secondary),
+                    );
+                    ui.add_space(12.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new("Developed by Swatto")
+                            .size(13.0)
+                            .strong()
+                            .color(theme.text_primary),
+                    );
+                    ui.add_space(4.0);
+                    ui.hyperlink_to(
+                        "github.com/Swatto86/DiskSleuth",
+                        "https://github.com/Swatto86/DiskSleuth",
+                    );
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new("MIT License · © 2026 Swatto")
+                            .size(11.0)
+                            .color(theme.text_muted),
+                    );
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new("Built with Rust & egui")
+                            .size(11.0)
+                            .color(theme.text_muted),
+                    );
+                    ui.add_space(2.0);
+                    ui.label(
+                        egui::RichText::new("with a little sprinkling of help from SteveO")
+                            .size(10.0)
+                            .italics()
+                            .color(theme.text_muted),
+                    );
+                    ui.add_space(8.0);
+                });
+            });
+        self.state.show_about = show_about;
 
         // ── Bottom status bar ─────────────────────────────────────
         egui::TopBottomPanel::bottom("status_bar")

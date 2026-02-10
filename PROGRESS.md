@@ -1,7 +1,7 @@
 # DiskSleuth — Project Progress
 
 **Author:** Swatto  
-**Repository:** <https://github.com/Swatto/disksleuth>  
+**Repository:** <https://github.com/Swatto86/DiskSleuth>  
 **License:** MIT  
 **Last updated:** 2026-02-10
 

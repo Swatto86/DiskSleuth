@@ -18,7 +18,7 @@ fn main() -> anyhow::Result<()> {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("DiskSleuth — Disk Space Analyser")
-            .with_maximized(true)
+            .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([800.0, 500.0])
             .with_icon(icon),
         ..Default::default()

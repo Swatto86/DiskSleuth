@@ -1,0 +1,166 @@
+# GitHub Actions workflow for building and releasing DiskSleuth
+# This workflow builds the standalone Windows executable and creates a GitHub Release.
+#
+# To trigger a release:
+# 1. Run: .\update-application.ps1 -Version "0.2.0" -Notes "What changed"
+# 2. The script bumps the version, tags, and pushes — this workflow runs automatically.
+#
+# Or manually:
+# 1. Update the version in Cargo.toml [workspace.package]
+# 2. Create and push a tag: git tag -a v0.2.0 -m "Release notes" && git push origin v0.2.0
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.2.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create-release.outputs.result }}
+      version: ${{ steps.get-version.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version
+        id: get-version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Fetch tags with annotations
+        run: |
+          git fetch --tags --force
+
+      - name: Get release notes from tag
+        id: get-notes
+        run: |
+          TAG_NAME="v${{ steps.get-version.outputs.version }}"
+          echo "Extracting release notes for tag: $TAG_NAME"
+
+          # Use git for-each-ref to get the full tag annotation
+          NOTES=$(git for-each-ref --format='%(contents)' "refs/tags/$TAG_NAME" 2>/dev/null || echo "")
+
+          # If empty, try fallback
+          if [ -z "$(echo "$NOTES" | tr -d '[:space:]')" ]; then
+            RAW_NOTES=$(git tag -l -n1000 "$TAG_NAME" 2>/dev/null || echo "")
+            if [ -n "$RAW_NOTES" ]; then
+              NOTES=$(echo "$RAW_NOTES" | sed "s/^${TAG_NAME}[[:space:]]*//")
+            fi
+          fi
+
+          # If still empty, use default message
+          if [ -z "$(echo "$NOTES" | tr -d '[:space:]')" ]; then
+            NOTES=$(printf "Release %s\n\nSee the assets below to download DiskSleuth." "$TAG_NAME")
+          fi
+
+          echo "Release notes:"
+          echo "$NOTES"
+
+          # Escape for GitHub Actions output (handle multi-line)
+          {
+            echo 'notes<<EOF'
+            echo "$NOTES"
+            echo 'EOF'
+          } >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        id: create-release
+        uses: actions/github-script@v7
+        env:
+          RELEASE_NOTES: ${{ steps.get-notes.outputs.notes }}
+          RELEASE_VERSION: ${{ steps.get-version.outputs.version }}
+        with:
+          script: |
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: `v${process.env.RELEASE_VERSION}`,
+              name: `DiskSleuth v${process.env.RELEASE_VERSION}`,
+              body: process.env.RELEASE_NOTES,
+              draft: true,
+              prerelease: false
+            });
+            return data.id
+
+  build:
+    needs: create-release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Verify binary exists
+        run: |
+          if (!(Test-Path "target\release\DiskSleuth.exe")) {
+            Write-Error "DiskSleuth.exe not found!"
+            exit 1
+          }
+          $size = (Get-Item "target\release\DiskSleuth.exe").Length
+          Write-Host "DiskSleuth.exe size: $([math]::Round($size / 1MB, 2)) MB"
+
+      - name: Upload release asset
+        uses: actions/github-script@v7
+        env:
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'target/release/DiskSleuth.exe';
+            const data = fs.readFileSync(path);
+
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: parseInt(process.env.RELEASE_ID),
+              name: 'DiskSleuth.exe',
+              data: data,
+              headers: {
+                'content-type': 'application/octet-stream',
+                'content-length': data.length,
+              },
+            });
+
+  publish-release:
+    runs-on: ubuntu-latest
+    needs: [create-release, build]
+    steps:
+      - name: Publish release
+        uses: actions/github-script@v7
+        env:
+          release_id: ${{ needs.create-release.outputs.release_id }}
+        with:
+          script: |
+            github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: parseInt(process.env.release_id),
+              draft: false,
+              prerelease: false
+            })

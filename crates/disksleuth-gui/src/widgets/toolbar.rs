@@ -63,6 +63,15 @@ pub fn toolbar(ui: &mut Ui, state: &mut AppState, theme: &DiskSleuthTheme) {
 
         // Spacer.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // About button.
+            if ui
+                .button("ℹ")
+                .on_hover_text("About DiskSleuth")
+                .clicked()
+            {
+                state.show_about = true;
+            }
+
             // Theme toggle.
             let theme_icon = match state.theme_mode {
                 ThemeMode::Dark => "☀",

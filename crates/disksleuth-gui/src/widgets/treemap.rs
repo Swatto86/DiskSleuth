@@ -436,6 +436,7 @@ pub fn treemap(
             egui::LayerId::new(egui::Order::Tooltip, map_rect.id),
             map_rect.id.with("treemap_tip"),
             |ui| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                 ui.label(
                     egui::RichText::new(&tr.name)
                         .strong()
