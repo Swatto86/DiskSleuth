@@ -1,0 +1,20 @@
+[package]
+name = "disksleuth-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "GUI frontend for DiskSleuth disk space analyser"
+
+[dependencies]
+disksleuth-core = { path = "../disksleuth-core" }
+eframe.workspace = true
+egui.workspace = true
+egui_extras.workspace = true
+crossbeam-channel.workspace = true
+parking_lot.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+compact_str.workspace = true

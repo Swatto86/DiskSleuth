@@ -1,0 +1,121 @@
+# DiskSleuth
+
+A fast, visual disk space analyser for Windows — built with Rust and [egui](https://github.com/emilk/egui).
+
+DiskSleuth scans your drives in parallel, displays results in an interactive tree view and a SpaceSniffer-style treemap, and helps you find where your disk space is going.
+
+## Features
+
+- **Parallel scanning** — uses [jwalk](https://crates.io/crates/jwalk) + rayon to walk the filesystem across all available cores
+- **NTFS MFT fast-scan** — optional direct MFT reader (`FSCTL_ENUM_USN_DATA`) for near-instant enumeration on NTFS volumes (requires admin)
+- **SpaceSniffer-style treemap** — nested squarified layout with directory headers, click-to-navigate, back/forward/up, and breadcrumb trail
+- **Virtualised tree view** — renders only visible rows for smooth scrolling with millions of files; proper font-metric text clipping with ellipsis
+- **Real-time progress** — tree view and treemap update live as the scan progresses via `Arc<RwLock<FileTree>>`
+- **Selection sync** — clicking an item in the tree highlights it in the treemap and vice versa
+- **Auto-scan on startup** — begins scanning the OS drive (`%SystemDrive%`) immediately on launch
+- **Arena-allocated file tree** — `Vec<FileNode>` + `NodeIndex(u32)` for cache-friendly traversal and O(n) bottom-up aggregation
+- **Drive picker** — lists all mounted volumes with usage bars, filesystem type, and capacity
+- **File type breakdown** — extension-based categorisation with proportional bars
+- **Top N largest files** — pre-computed during aggregation
+- **Stale file finder** — identifies files by age threshold
+- **Right-click context menu** — Open in Explorer, Copy Path
+- **Dark / Light theme** toggle
+- **Cancellation** — stop a scan at any time; partial results stay visible
+- **Single portable executable** — no installer, no runtime dependencies
+
+## Screenshot
+
+<!-- TODO: Add screenshot -->
+
+## Getting Started
+
+### Requirements
+
+- **Windows 10+** (x86_64)
+- **Rust 1.75+** (2021 edition) — for building from source
+
+### Build & Run
+
+```powershell
+git clone https://github.com/Swatto/disksleuth.git
+cd disksleuth
+
+# Release build (recommended — LTO, stripped, optimised)
+cargo build --release
+
+# Run
+.\target\release\disksleuth.exe
+
+# Or build + run in one step
+cargo run --release
+```
+
+The release binary is at `target\release\disksleuth.exe` — a single portable `.exe`, no installer needed.
+
+### Run Tests
+
+```powershell
+cargo test --workspace
+```
+
+## Architecture
+
+```
+disksleuth/
+├── src/main.rs                     # Thin binary entry point
+├── crates/
+│   ├── disksleuth-core/            # Pure logic — scanning, model, analysis (zero UI deps)
+│   │   └── src/
+│   │       ├── scanner/            # Parallel walker, MFT reader, progress channel
+│   │       ├── model/              # Arena file tree, node types, size formatting
+│   │       ├── analysis/           # Top files, file types, age analysis, duplicates
+│   │       └── platform/           # Windows drive enumeration, admin detection
+│   └── disksleuth-gui/             # egui desktop frontend
+│       └── src/
+│           ├── app.rs              # eframe::App implementation
+│           ├── state.rs            # UI state, navigation history, tree expansion
+│           ├── theme.rs            # Dark/light colour palette
+│           ├── widgets/            # TreeView, Treemap, DrivePicker, Toolbar, StatusBar
+│           └── panels/             # Scan, Tree, Details, Chart panels
+├── build.rs                        # Windows manifest + icon embedding
+└── assets/fonts/                   # Bundled fonts
+```
+
+### Key Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| Arena tree (`Vec<FileNode>`) | Cache-friendly, zero-allocation traversal, O(n) aggregation |
+| Singly-linked children | `first_child` + `next_sibling` — no `Vec` per node |
+| Names only, no full paths | Paths reconstructed on-demand via parent chain |
+| Painter-based tree view | Pixel-precise virtualised rendering, O(1) per frame |
+| `parking_lot::RwLock` for live tree | Lock-free reads during rendering, writer only from scanner thread |
+| Crossbeam channels for progress | Decouples scanner from UI — UI never blocks |
+
+## Dependencies
+
+| Crate | Purpose |
+|-------|---------|
+| `eframe` / `egui` 0.31 | Immediate-mode GUI framework |
+| `jwalk` 0.8 | Parallel directory walking |
+| `rayon` 1.10 | Work-stealing thread pool |
+| `crossbeam-channel` 0.5 | Scan → UI progress messaging |
+| `compact_str` 0.8 | Small-string optimisation for file names |
+| `windows` 0.58 | Win32 API (drives, filesystem, MFT) |
+| `parking_lot` 0.12 | Fast reader-writer locks |
+| `chrono` 0.4 | Date/time for file age analysis |
+
+## Roadmap
+
+- [ ] Export scan results to CSV / JSON
+- [ ] Duplicate file detection
+- [ ] File type pie / donut chart
+- [ ] Keyboard navigation (arrow keys, vim-style)
+- [ ] Sort by column header click
+- [ ] Custom folder scan (not just whole drives)
+- [ ] Scan history & comparison
+- [ ] File deletion with recycle bin support
+
+## License
+
+[MIT](LICENSE)
