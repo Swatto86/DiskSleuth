@@ -42,6 +42,13 @@ impl DiskSleuthApp {
 }
 
 impl eframe::App for DiskSleuthApp {
+    /// Override the GPU clear colour to match the dark theme background,
+    /// preventing the white flash on startup.
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        // Match DiskSleuthTheme::dark().background = rgb(0x1e, 0x1e, 0x2e)
+        [0.118, 0.118, 0.180, 1.0]
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
 
         // Process any pending scan messages before rendering.
