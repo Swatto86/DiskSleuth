@@ -5,17 +5,21 @@ use crate::panels;
 use crate::state::AppState;
 use crate::widgets;
 
-/// The DiskSleuth application.
-pub struct DiskSleuthApp {
-    state: AppState,
+/// Pre-built application state.
+///
+/// Construct this **before** calling `eframe::run_native` so that the
+/// expensive work (drive enumeration, initial scan kick-off) completes
+/// before the OS window is created.  This matches LogSleuth's startup
+/// pattern and prevents the window from sitting on a white background
+/// while setup runs.
+pub struct DiskSleuthState {
+    pub(crate) inner: AppState,
 }
 
-impl DiskSleuthApp {
-    /// Create a new application instance.
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // Set dark visuals once at startup so the very first frame is dark.
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
-
+impl DiskSleuthState {
+    /// Enumerate drives and start the auto-scan of the OS drive.
+    /// Call this before `eframe::run_native`.
+    pub fn build() -> Self {
         let mut state = AppState::new();
 
         // Auto-scan the OS drive on startup.
@@ -31,7 +35,25 @@ impl DiskSleuthApp {
             state.start_scan(path);
         }
 
-        Self { state }
+        Self { inner: state }
+    }
+}
+
+/// The DiskSleuth application.
+pub struct DiskSleuthApp {
+    state: AppState,
+}
+
+impl DiskSleuthApp {
+    /// Create a new application instance from pre-built state.
+    ///
+    /// The state should have been constructed by [`DiskSleuthState::build()`]
+    /// *before* `eframe::run_native` is called.
+    pub fn with_state(cc: &eframe::CreationContext<'_>, state: DiskSleuthState) -> Self {
+        // Apply dark visuals -- egui defaults to dark anyway, but being
+        // explicit ensures the very first frame uses the right palette.
+        cc.egui_ctx.set_visuals(egui::Visuals::dark());
+        Self { state: state.inner }
     }
 }
 

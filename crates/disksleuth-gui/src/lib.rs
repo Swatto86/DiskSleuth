@@ -7,4 +7,4 @@ pub mod panels;
 pub mod state;
 pub mod widgets;
 
-pub use app::DiskSleuthApp;
+pub use app::{DiskSleuthApp, DiskSleuthState};
