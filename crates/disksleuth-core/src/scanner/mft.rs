@@ -25,7 +25,6 @@
 /// 4. Build a `HashMap<u64, NodeIndex>` mapping MFT reference → tree node.
 /// 5. Wire up parent → child relationships.
 /// 6. Stat files for sizes, then run `FileTree::aggregate_sizes()`.
-
 use crate::model::{FileNode, FileTree, NodeIndex};
 use crate::platform::permissions::is_elevated;
 use crate::scanner::progress::ScanProgress;
@@ -33,10 +32,11 @@ use crate::scanner::LiveTree;
 use compact_str::CompactString;
 use crossbeam_channel::Sender;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, GetVolumeInformationW, FILE_ATTRIBUTE_DIRECTORY, FILE_SHARE_READ,
@@ -45,7 +45,6 @@ use windows::Win32::Storage::FileSystem::{
 use windows::Win32::System::Ioctl::{
     FSCTL_ENUM_USN_DATA, FSCTL_GET_NTFS_VOLUME_DATA, NTFS_VOLUME_DATA_BUFFER,
 };
-use windows::core::PCWSTR;
 
 /// Check whether MFT direct reading is available for the given path.
 ///
@@ -53,7 +52,7 @@ use windows::core::PCWSTR;
 /// 1. The path must be a drive root (e.g. `C:\`).
 /// 2. The volume must be NTFS.
 /// 3. The process must be running with administrative privileges.
-pub fn is_mft_available(path: &PathBuf) -> bool {
+pub fn is_mft_available(path: &Path) -> bool {
     if !is_elevated() {
         tracing::debug!("MFT not available: process is not elevated");
         return false;
@@ -85,9 +84,8 @@ pub fn is_mft_available(path: &PathBuf) -> bool {
         return false;
     }
 
-    let fs_name = String::from_utf16_lossy(
-        &fs_buf[..fs_buf.iter().position(|&c| c == 0).unwrap_or(0)],
-    );
+    let fs_name =
+        String::from_utf16_lossy(&fs_buf[..fs_buf.iter().position(|&c| c == 0).unwrap_or(0)]);
 
     if fs_name != "NTFS" {
         tracing::debug!("MFT not available: filesystem is {fs_name}, not NTFS");
@@ -112,7 +110,9 @@ pub fn is_mft_available(path: &PathBuf) -> bool {
 
     match handle {
         Ok(h) => {
-            unsafe { let _ = CloseHandle(h); }
+            unsafe {
+                let _ = CloseHandle(h);
+            }
             tracing::info!("MFT available for volume {}", &path_str[..2]);
             true
         }
@@ -172,7 +172,9 @@ pub fn scan_mft(
                 path: vol_path,
                 message: "FSCTL_GET_NTFS_VOLUME_DATA failed".into(),
             });
-            unsafe { let _ = CloseHandle(handle); }
+            unsafe {
+                let _ = CloseHandle(handle);
+            }
             return;
         }
     };
@@ -208,7 +210,9 @@ pub fn scan_mft(
 
     loop {
         if cancel_flag.load(Ordering::Relaxed) {
-            unsafe { let _ = CloseHandle(handle); }
+            unsafe {
+                let _ = CloseHandle(handle);
+            }
             let _ = progress_tx.send(ScanProgress::Cancelled);
             return;
         }
@@ -232,8 +236,7 @@ pub fn scan_mft(
         }
 
         // First 8 bytes = next StartFileReferenceNumber.
-        let next_start =
-            u64::from_le_bytes(output_buf[0..8].try_into().unwrap());
+        let next_start = u64::from_le_bytes(output_buf[0..8].try_into().unwrap());
 
         // Parse USN_RECORD_V2 entries after the 8-byte header.
         let mut offset = 8usize;
@@ -242,9 +245,8 @@ pub fn scan_mft(
                 break;
             }
 
-            let record_len = u32::from_le_bytes(
-                output_buf[offset..offset + 4].try_into().unwrap(),
-            ) as usize;
+            let record_len =
+                u32::from_le_bytes(output_buf[offset..offset + 4].try_into().unwrap()) as usize;
 
             if record_len == 0 || offset + record_len > bytes_returned as usize {
                 break;
@@ -271,21 +273,15 @@ pub fn scan_mft(
             }
 
             let base = offset;
-            let file_ref = u64::from_le_bytes(
-                output_buf[base + 8..base + 16].try_into().unwrap(),
-            );
-            let parent_ref = u64::from_le_bytes(
-                output_buf[base + 16..base + 24].try_into().unwrap(),
-            );
-            let file_attrs = u32::from_le_bytes(
-                output_buf[base + 52..base + 56].try_into().unwrap(),
-            );
-            let name_len = u16::from_le_bytes(
-                output_buf[base + 56..base + 58].try_into().unwrap(),
-            ) as usize;
-            let name_offset = u16::from_le_bytes(
-                output_buf[base + 58..base + 60].try_into().unwrap(),
-            ) as usize;
+            let file_ref = u64::from_le_bytes(output_buf[base + 8..base + 16].try_into().unwrap());
+            let parent_ref =
+                u64::from_le_bytes(output_buf[base + 16..base + 24].try_into().unwrap());
+            let file_attrs =
+                u32::from_le_bytes(output_buf[base + 52..base + 56].try_into().unwrap());
+            let name_len =
+                u16::from_le_bytes(output_buf[base + 56..base + 58].try_into().unwrap()) as usize;
+            let name_offset =
+                u16::from_le_bytes(output_buf[base + 58..base + 60].try_into().unwrap()) as usize;
 
             let name_start = base + name_offset;
             let name_end = name_start + name_len;
@@ -321,7 +317,7 @@ pub fn scan_mft(
             }
 
             update_counter += 1;
-            if update_counter % 50000 == 0 {
+            if update_counter.is_multiple_of(50000) {
                 let _ = progress_tx.send(ScanProgress::Update {
                     files_found,
                     dirs_found,
@@ -336,7 +332,9 @@ pub fn scan_mft(
         enum_data.start_file_reference_number = next_start;
     }
 
-    unsafe { let _ = CloseHandle(handle); }
+    unsafe {
+        let _ = CloseHandle(handle);
+    }
 
     tracing::info!(
         "MFT enumeration complete: {} records ({} files, {} dirs) in {:?}",
@@ -406,9 +404,7 @@ fn get_ntfs_volume_data(handle: HANDLE) -> Option<NTFS_VOLUME_DATA_BUFFER> {
             FSCTL_GET_NTFS_VOLUME_DATA,
             None,
             0,
-            Some(
-                &mut vol_data as *mut NTFS_VOLUME_DATA_BUFFER as *mut std::ffi::c_void,
-            ),
+            Some(&mut vol_data as *mut NTFS_VOLUME_DATA_BUFFER as *mut std::ffi::c_void),
             std::mem::size_of::<NTFS_VOLUME_DATA_BUFFER>() as u32,
             Some(&mut bytes_returned),
             None,
@@ -433,7 +429,7 @@ fn get_ntfs_volume_data(handle: HANDLE) -> Option<NTFS_VOLUME_DATA_BUFFER> {
 fn build_tree_from_mft(
     records: &[MftEntry],
     root_display: &str,
-    root_path: &PathBuf,
+    root_path: &Path,
     progress_tx: &Sender<ScanProgress>,
     cancel_flag: &Arc<AtomicBool>,
 ) -> (FileTree, u64) {
@@ -442,8 +438,7 @@ fn build_tree_from_mft(
 
     let root_idx = tree.add_root(CompactString::new(root_display));
 
-    let mut ref_to_idx: HashMap<u64, NodeIndex> =
-        HashMap::with_capacity(records.len() + 1);
+    let mut ref_to_idx: HashMap<u64, NodeIndex> = HashMap::with_capacity(records.len() + 1);
 
     // The NTFS root directory has MFT reference number 5.
     const NTFS_ROOT_MFT_REF: u64 = 5;
@@ -508,8 +503,7 @@ fn build_tree_from_mft(
         }
 
         let rel_path = tree.full_path(NodeIndex::new(i));
-        let full_path = if rel_path.starts_with(root_display) {
-            let remainder = &rel_path[root_display.len()..];
+        let full_path = if let Some(remainder) = rel_path.strip_prefix(root_display) {
             let remainder = remainder.trim_start_matches('\\');
             if remainder.is_empty() {
                 format!("{}\\", root_display)
@@ -536,7 +530,7 @@ fn build_tree_from_mft(
         }
 
         files_processed += 1;
-        if files_processed % 25000 == 0 {
+        if files_processed.is_multiple_of(25000) {
             let _ = progress_tx.send(ScanProgress::Update {
                 files_found: files_processed,
                 dirs_found: 0,

@@ -3,7 +3,6 @@
 /// Nodes are stored in a flat `Vec<FileNode>` for cache-friendly traversal.
 /// Parent-child relationships use indices rather than pointers, which also
 /// makes serialisation trivial and avoids reference-counting overhead.
-
 use compact_str::CompactString;
 use std::time::SystemTime;
 

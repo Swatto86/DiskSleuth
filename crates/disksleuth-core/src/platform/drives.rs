@@ -2,7 +2,6 @@
 ///
 /// Lists all available drives with their type, label, total/free space,
 /// and filesystem name.
-
 use crate::model::size;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
@@ -135,9 +134,7 @@ pub fn enumerate_drives() -> Vec<DriveInfo> {
         };
 
         let filesystem = if has_volume_info {
-            String::from_utf16_lossy(
-                &fs_buf[..fs_buf.iter().position(|&c| c == 0).unwrap_or(0)],
-            )
+            String::from_utf16_lossy(&fs_buf[..fs_buf.iter().position(|&c| c == 0).unwrap_or(0)])
         } else {
             String::new()
         };

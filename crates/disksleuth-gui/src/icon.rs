@@ -1,9 +1,9 @@
-/// DiskSleuth application icon generator.
-///
-/// Produces a procedural icon: a pie-chart (disk usage visualisation) with
-/// a magnifying-glass ring and handle (the "sleuth" motif).  The icon is
-/// rendered at an arbitrary resolution as RGBA pixel data suitable for use
-/// as a window icon or for ICO file generation.
+//! DiskSleuth application icon generator.
+//!
+//! Produces a procedural icon: a pie-chart (disk usage visualisation) with
+//! a magnifying-glass ring and handle (the "sleuth" motif).  The icon is
+//! rendered at an arbitrary resolution as RGBA pixel data suitable for use
+//! as a window icon or for ICO file generation.
 
 /// Generate a DiskSleuth icon as egui `IconData`.
 pub fn generate_icon(size: u32) -> egui::IconData {
@@ -43,9 +43,9 @@ pub fn render_icon(size: u32) -> Vec<u8> {
     // Angles in degrees (from +X axis, clockwise in screen space).
     let segments: &[(f32, f32, [u8; 3])] = &[
         (0.0, 144.0, [0x89, 0xb4, 0xfa]),   // Blue  — documents
-        (144.0, 245.0, [0xa6, 0xe3, 0xa1]),  // Green — free / code
-        (245.0, 314.0, [0xf9, 0xe2, 0xaf]),  // Amber — media
-        (314.0, 360.0, [0xf3, 0x8b, 0xa8]),  // Pink  — system
+        (144.0, 245.0, [0xa6, 0xe3, 0xa1]), // Green — free / code
+        (245.0, 314.0, [0xf9, 0xe2, 0xaf]), // Amber — media
+        (314.0, 360.0, [0xf3, 0x8b, 0xa8]), // Pink  — system
     ];
 
     let boundaries: Vec<f32> = segments.iter().map(|seg| seg.0).collect();
@@ -131,8 +131,7 @@ pub fn render_icon(size: u32) -> Vec<u8> {
             let t = project_t(px, py, h_start_x, h_start_y, h_end_x, h_end_y);
 
             if t > -0.05 && t < 1.05 {
-                let half_w =
-                    h_width_start + (h_width_end - h_width_start) * t.clamp(0.0, 1.0);
+                let half_w = h_width_start + (h_width_end - h_width_start) * t.clamp(0.0, 1.0);
                 if ld < half_w + 1.5 {
                     let handle_aa = smooth_edge(ld, half_w);
 

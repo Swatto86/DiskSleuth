@@ -1,19 +1,17 @@
 /// Details panel — shows information about the currently selected node.
-
 use crate::state::AppState;
-use crate::theme::DiskSleuthTheme;
 use disksleuth_core::model::size::{format_count, format_size};
 use disksleuth_core::model::FileTree;
 use egui::Ui;
 
 /// Draw the details panel for the currently selected node.
-pub fn details_panel(ui: &mut Ui, state: &AppState, theme: &DiskSleuthTheme) {
+pub fn details_panel(ui: &mut Ui, state: &AppState) {
     let selected = match state.selected_node {
         Some(s) => s,
         None => {
             ui.label(
                 egui::RichText::new("Select an item to see details")
-                    .color(theme.text_muted)
+                    .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86))
                     .italics(),
             );
             return;
@@ -49,7 +47,7 @@ pub fn details_panel(ui: &mut Ui, state: &AppState, theme: &DiskSleuthTheme) {
         } else {
             "📄"
         })
-            .size(16.0),
+        .size(16.0),
     );
     ui.add_space(2.0);
 
@@ -58,7 +56,7 @@ pub fn details_panel(ui: &mut Ui, state: &AppState, theme: &DiskSleuthTheme) {
         ui.label(
             egui::RichText::new("Access denied — contents could not be read")
                 .size(11.0)
-                .color(theme.warning)
+                .color(egui::Color32::from_rgb(0xfa, 0xb3, 0x87))
                 .italics(),
         );
         ui.add_space(2.0);
@@ -69,7 +67,7 @@ pub fn details_panel(ui: &mut Ui, state: &AppState, theme: &DiskSleuthTheme) {
         egui::RichText::new(node.name.as_str())
             .size(14.0)
             .strong()
-            .color(theme.text_primary),
+            .color(egui::Color32::from_rgb(0xe4, 0xe4, 0xe8)),
     );
 
     ui.add_space(4.0);
@@ -78,7 +76,7 @@ pub fn details_panel(ui: &mut Ui, state: &AppState, theme: &DiskSleuthTheme) {
     ui.label(
         egui::RichText::new(&full_path)
             .size(11.0)
-            .color(theme.text_muted),
+            .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
     );
 
     ui.add_space(8.0);
@@ -90,35 +88,43 @@ pub fn details_panel(ui: &mut Ui, state: &AppState, theme: &DiskSleuthTheme) {
         .num_columns(2)
         .spacing([8.0, 4.0])
         .show(ui, |ui| {
-            ui.label(egui::RichText::new("Size:").color(theme.text_muted));
+            ui.label(egui::RichText::new("Size:").color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)));
             ui.label(
                 egui::RichText::new(format_size(node.size))
-                    .color(theme.accent)
+                    .color(egui::Color32::from_rgb(0x89, 0xb4, 0xfa))
                     .strong(),
             );
             ui.end_row();
 
             if node.size != node.allocated_size {
-                ui.label(egui::RichText::new("On disk:").color(theme.text_muted));
+                ui.label(
+                    egui::RichText::new("On disk:")
+                        .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
+                );
                 ui.label(
                     egui::RichText::new(format_size(node.allocated_size))
-                        .color(theme.text_secondary),
+                        .color(egui::Color32::from_rgb(0xb8, 0xb8, 0xc4)),
                 );
                 ui.end_row();
             }
 
-            ui.label(egui::RichText::new("% of parent:").color(theme.text_muted));
+            ui.label(
+                egui::RichText::new("% of parent:")
+                    .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
+            );
             ui.label(
                 egui::RichText::new(format!("{:.1}%", node.percent_of_parent))
-                    .color(theme.text_secondary),
+                    .color(egui::Color32::from_rgb(0xb8, 0xb8, 0xc4)),
             );
             ui.end_row();
 
             if node.is_dir {
-                ui.label(egui::RichText::new("Files:").color(theme.text_muted));
+                ui.label(
+                    egui::RichText::new("Files:").color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
+                );
                 ui.label(
                     egui::RichText::new(format_count(node.descendant_count))
-                        .color(theme.text_secondary),
+                        .color(egui::Color32::from_rgb(0xb8, 0xb8, 0xc4)),
                 );
                 ui.end_row();
             }
@@ -135,9 +141,13 @@ pub fn details_panel(ui: &mut Ui, state: &AppState, theme: &DiskSleuthTheme) {
                     } else {
                         format!("{:.1} years ago", days as f64 / 365.0)
                     };
-                    ui.label(egui::RichText::new("Modified:").color(theme.text_muted));
                     ui.label(
-                        egui::RichText::new(date_str).color(theme.text_secondary),
+                        egui::RichText::new("Modified:")
+                            .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
+                    );
+                    ui.label(
+                        egui::RichText::new(date_str)
+                            .color(egui::Color32::from_rgb(0xb8, 0xb8, 0xc4)),
                     );
                     ui.end_row();
                 }

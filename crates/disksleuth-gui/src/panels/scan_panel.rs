@@ -1,14 +1,12 @@
 /// Scan panel — drive selection and scan controls in the left sidebar.
-
 use crate::state::{AppPhase, AppState};
-use crate::theme::DiskSleuthTheme;
 use crate::widgets;
 
 use egui::Ui;
 
 /// Draw the scan panel (left sidebar content).
-pub fn scan_panel(ui: &mut Ui, state: &mut AppState, theme: &DiskSleuthTheme) {
-    widgets::drive_picker::drive_picker(ui, state, theme);
+pub fn scan_panel(ui: &mut Ui, state: &mut AppState) {
+    widgets::drive_picker::drive_picker(ui, state);
 
     // Scanning progress indicator.
     if state.phase == AppPhase::Scanning {
@@ -19,7 +17,7 @@ pub fn scan_panel(ui: &mut Ui, state: &mut AppState, theme: &DiskSleuthTheme) {
                 "{} files found",
                 disksleuth_core::model::size::format_count(state.scan_files_found)
             ))
-            .color(theme.text_secondary),
+            .color(egui::Color32::from_rgb(0xb8, 0xb8, 0xc4)),
         );
     }
 
@@ -32,7 +30,10 @@ pub fn scan_panel(ui: &mut Ui, state: &mut AppState, theme: &DiskSleuthTheme) {
         ui.heading("Analysis");
         ui.add_space(4.0);
 
-        if ui.selectable_label(false, "📊 Top 10 Largest Files").clicked() {
+        if ui
+            .selectable_label(false, "📊 Top 10 Largest Files")
+            .clicked()
+        {
             // Scroll to / highlight top files — for now, select the first largest file.
             if let Some(ref tree) = state.tree {
                 if let Some(&idx) = tree.largest_files.first() {

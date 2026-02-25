@@ -7,7 +7,6 @@
 /// Both tiers write into a **shared `LiveTree`** (`Arc<RwLock<FileTree>>`) so
 /// the UI can render a real-time, incrementally-growing tree view while the
 /// scan is running.
-
 pub mod mft;
 pub mod parallel;
 pub mod progress;
@@ -88,7 +87,7 @@ pub fn start_scan(root_path: PathBuf) -> ScanHandle {
                 );
 
                 // If the MFT scan failed (tree is empty), fall back to Tier 2.
-                let tree_empty = tree_clone.read().len() == 0;
+                let tree_empty = tree_clone.read().is_empty();
                 if tree_empty && !cancel_clone.load(Ordering::Relaxed) {
                     info!("MFT scan produced no results — falling back to parallel walk (Tier 2)");
                     let _ = progress_tx.send(ScanProgress::ScanTier {

@@ -12,9 +12,7 @@
 ///
 /// **Labels**: Shown when the rectangle is large enough.
 /// **Hover**: Tooltip with name, size, percentage, type.
-
 use crate::state::AppState;
-use crate::theme::DiskSleuthTheme;
 use disksleuth_core::model::size::format_size;
 use disksleuth_core::model::{FileTree, NodeIndex};
 use egui::{Color32, Rect, Sense, Ui, Vec2};
@@ -81,11 +79,7 @@ pub enum TreemapAction {
 }
 
 /// Draw the treemap widget. Returns an optional action for the caller to handle.
-pub fn treemap(
-    ui: &mut Ui,
-    state: &AppState,
-    theme: &DiskSleuthTheme,
-) -> Option<TreemapAction> {
+pub fn treemap(ui: &mut Ui, state: &AppState) -> Option<TreemapAction> {
     // Obtain tree reference — final tree, then live tree.
     let live_guard;
     let tree: &FileTree;
@@ -94,7 +88,7 @@ pub fn treemap(
         tree = t;
     } else if let Some(ref lt) = state.live_tree {
         live_guard = lt.read();
-        if live_guard.len() == 0 {
+        if live_guard.is_empty() {
             return None;
         }
         tree = &*live_guard;
@@ -102,7 +96,7 @@ pub fn treemap(
         ui.centered_and_justified(|ui| {
             ui.label(
                 egui::RichText::new("No scan results. Select a drive and click Scan.")
-                    .color(theme.text_muted),
+                    .color(Color32::from_rgb(0x6c, 0x70, 0x86)),
             );
         });
         return None;
@@ -121,7 +115,7 @@ pub fn treemap(
     }
 
     let root = &tree.nodes[root_node.idx()];
-    let is_light = theme.background.r() > 128;
+    let is_light = false;
 
     let mut action: Option<TreemapAction> = None;
 
@@ -132,21 +126,30 @@ pub fn treemap(
         let can_up = root.parent.is_some();
 
         if ui
-            .add_enabled(can_back, egui::Button::new("◀").min_size(Vec2::new(28.0, 22.0)))
+            .add_enabled(
+                can_back,
+                egui::Button::new("◀").min_size(Vec2::new(28.0, 22.0)),
+            )
             .on_hover_text("Back")
             .clicked()
         {
             action = Some(TreemapAction::Back);
         }
         if ui
-            .add_enabled(can_forward, egui::Button::new("▶").min_size(Vec2::new(28.0, 22.0)))
+            .add_enabled(
+                can_forward,
+                egui::Button::new("▶").min_size(Vec2::new(28.0, 22.0)),
+            )
             .on_hover_text("Forward")
             .clicked()
         {
             action = Some(TreemapAction::Forward);
         }
         if ui
-            .add_enabled(can_up, egui::Button::new("▲").min_size(Vec2::new(28.0, 22.0)))
+            .add_enabled(
+                can_up,
+                egui::Button::new("▲").min_size(Vec2::new(28.0, 22.0)),
+            )
             .on_hover_text("Up to parent")
             .clicked()
         {
@@ -171,7 +174,7 @@ pub fn treemap(
             if i > 0 {
                 ui.label(
                     egui::RichText::new(" › ")
-                        .color(theme.text_muted)
+                        .color(Color32::from_rgb(0x6c, 0x70, 0x86))
                         .size(12.0),
                 );
             }
@@ -179,12 +182,12 @@ pub fn treemap(
             let is_current = bc_node == root_node;
             let text = if is_current {
                 egui::RichText::new(name.as_str())
-                    .color(theme.text_primary)
+                    .color(Color32::from_rgb(0xe4, 0xe4, 0xe8))
                     .size(12.0)
                     .strong()
             } else {
                 egui::RichText::new(name.as_str())
-                    .color(theme.accent)
+                    .color(Color32::from_rgb(0x89, 0xb4, 0xfa))
                     .size(12.0)
             };
             let resp = ui.add(egui::Label::new(text).sense(Sense::click()));
@@ -199,7 +202,7 @@ pub fn treemap(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
                 egui::RichText::new(format_size(root.size))
-                    .color(theme.accent)
+                    .color(Color32::from_rgb(0x89, 0xb4, 0xfa))
                     .size(12.0),
             );
         });
@@ -235,15 +238,21 @@ pub fn treemap(
         painter.text(
             bounds.center(),
             egui::Align2::CENTER_CENTER,
-            if root.is_dir { "Empty directory" } else { &root.name },
+            if root.is_dir {
+                "Empty directory"
+            } else {
+                &root.name
+            },
             egui::FontId::proportional(14.0),
-            theme.text_muted,
+            Color32::from_rgb(0x6c, 0x70, 0x86),
         );
         return action;
     }
 
     let mut rects: Vec<TreemapRect> = Vec::with_capacity(512);
-    layout_nested(tree, &children, root.size, bounds, 0, 0, is_light, &mut rects);
+    layout_nested(
+        tree, &children, root.size, bounds, 0, 0, is_light, &mut rects,
+    );
 
     // Sort by depth ascending so deeper items are drawn (and hit-tested) on top.
     rects.sort_by_key(|r| r.depth);
@@ -251,7 +260,10 @@ pub fn treemap(
     // ── Render ─────────────────────────────────────────────────────
     let hover_pos = ui.input(|i| i.pointer.hover_pos());
     let clicked = ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Primary));
-    let double_clicked = ui.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary));
+    let double_clicked = ui.input(|i| {
+        i.pointer
+            .button_double_clicked(egui::PointerButton::Primary)
+    });
 
     // Highlight the currently selected node from the tree view.
     let selected_node = state.selected_node;
@@ -514,6 +526,7 @@ fn truncate_name(name: &str, max_chars: usize) -> String {
 
 /// Recursively lay out children, producing nested rectangles.
 /// Directories get a header bar and their children are laid out inside.
+#[allow(clippy::too_many_arguments)]
 fn layout_nested(
     tree: &FileTree,
     children: &[NodeIndex],
@@ -549,10 +562,20 @@ fn layout_nested(
     }
 
     // Run squarified algorithm on this level, then recurse into directories.
-    squarify_nested(&items, bounds, tree, parent_size, depth, base_color_idx, is_light, rects);
+    squarify_nested(
+        &items,
+        bounds,
+        tree,
+        parent_size,
+        depth,
+        base_color_idx,
+        is_light,
+        rects,
+    );
 }
 
 /// Squarified layout that produces nested rectangles.
+#[allow(clippy::too_many_arguments)]
 fn squarify_nested(
     items: &[(NodeIndex, f32)],
     bounds: Rect,
@@ -686,8 +709,8 @@ fn squarify_nested(
 
             if child.is_dir {
                 // Directory: add header bar, then recurse into children.
-                let has_room_for_header = item_rect.height() > HEADER_H + 4.0
-                    && item_rect.width() > 8.0;
+                let has_room_for_header =
+                    item_rect.height() > HEADER_H + 4.0 && item_rect.width() > 8.0;
 
                 let header_rect = if has_room_for_header {
                     Some(Rect::from_min_size(

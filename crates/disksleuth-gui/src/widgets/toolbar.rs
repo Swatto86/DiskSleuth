@@ -1,18 +1,16 @@
-/// Top action bar — scan controls, theme toggle, and app branding.
-
+/// Top action bar -- scan controls and app branding.
 use crate::state::{AppPhase, AppState};
-use crate::theme::{DiskSleuthTheme, ThemeMode};
 use egui::Ui;
 
 /// Draw the toolbar.
-pub fn toolbar(ui: &mut Ui, state: &mut AppState, theme: &DiskSleuthTheme) {
+pub fn toolbar(ui: &mut Ui, state: &mut AppState) {
     ui.horizontal(|ui| {
         // App title.
         ui.label(
             egui::RichText::new("🔍 DiskSleuth")
                 .size(18.0)
                 .strong()
-                .color(theme.accent),
+                .color(egui::Color32::from_rgb(0x89, 0xb4, 0xfa)),
         );
 
         ui.separator();
@@ -64,25 +62,8 @@ pub fn toolbar(ui: &mut Ui, state: &mut AppState, theme: &DiskSleuthTheme) {
         // Spacer.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // About button.
-            if ui
-                .button("ℹ")
-                .on_hover_text("About DiskSleuth")
-                .clicked()
-            {
+            if ui.button("ℹ").on_hover_text("About DiskSleuth").clicked() {
                 state.show_about = true;
-            }
-
-            // Theme toggle.
-            let theme_icon = match state.theme_mode {
-                ThemeMode::Dark => "☀",
-                ThemeMode::Light => "🌙",
-            };
-            if ui
-                .button(theme_icon)
-                .on_hover_text("Toggle theme")
-                .clicked()
-            {
-                state.theme_mode.toggle();
             }
 
             // Elevation indicator.
@@ -91,7 +72,7 @@ pub fn toolbar(ui: &mut Ui, state: &mut AppState, theme: &DiskSleuthTheme) {
                 ui.label(
                     egui::RichText::new("🛡 Admin")
                         .size(11.0)
-                        .color(theme.success),
+                        .color(egui::Color32::from_rgb(0xa6, 0xe3, 0xa1)),
                 );
             }
         });

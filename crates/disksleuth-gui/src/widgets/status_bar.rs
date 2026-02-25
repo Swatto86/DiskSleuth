@@ -1,19 +1,17 @@
 /// Bottom status bar — scan progress and statistics.
-
 use crate::state::{AppPhase, AppState};
-use crate::theme::DiskSleuthTheme;
 use disksleuth_core::model::size::{format_count, format_size};
 use egui::Ui;
 
 /// Draw the status bar at the bottom of the window.
-pub fn status_bar(ui: &mut Ui, state: &AppState, theme: &DiskSleuthTheme) {
+pub fn status_bar(ui: &mut Ui, state: &AppState) {
     ui.horizontal(|ui| {
         match state.phase {
             AppPhase::Idle => {
                 ui.label(
                     egui::RichText::new("Ready")
                         .size(12.0)
-                        .color(theme.text_muted),
+                        .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
                 );
             }
             AppPhase::Scanning => {
@@ -22,12 +20,12 @@ pub fn status_bar(ui: &mut Ui, state: &AppState, theme: &DiskSleuthTheme) {
 
                 // Scan tier badge.
                 let tier_label = if state.scan_is_mft { "MFT" } else { "Walk" };
-                let tier_color = if state.scan_is_mft { theme.accent } else { theme.text_muted };
-                ui.label(
-                    egui::RichText::new(tier_label)
-                        .size(11.0)
-                        .color(tier_color),
-                );
+                let tier_color = if state.scan_is_mft {
+                    egui::Color32::from_rgb(0x89, 0xb4, 0xfa)
+                } else {
+                    egui::Color32::from_rgb(0x6c, 0x70, 0x86)
+                };
+                ui.label(egui::RichText::new(tier_label).size(11.0).color(tier_color));
                 ui.separator();
 
                 // Truncate current path for display.
@@ -35,29 +33,23 @@ pub fn status_bar(ui: &mut Ui, state: &AppState, theme: &DiskSleuthTheme) {
                 ui.label(
                     egui::RichText::new(format!("Scanning {}...", display_path))
                         .size(12.0)
-                        .color(theme.text_secondary),
+                        .color(egui::Color32::from_rgb(0xb8, 0xb8, 0xc4)),
                 );
 
                 ui.separator();
 
                 ui.label(
-                    egui::RichText::new(format!(
-                        "{} files",
-                        format_count(state.scan_files_found)
-                    ))
-                    .size(12.0)
-                    .color(theme.text_primary),
+                    egui::RichText::new(format!("{} files", format_count(state.scan_files_found)))
+                        .size(12.0)
+                        .color(egui::Color32::from_rgb(0xe4, 0xe4, 0xe8)),
                 );
 
                 ui.separator();
 
                 ui.label(
-                    egui::RichText::new(format!(
-                        "{} dirs",
-                        format_count(state.scan_dirs_found)
-                    ))
-                    .size(12.0)
-                    .color(theme.text_primary),
+                    egui::RichText::new(format!("{} dirs", format_count(state.scan_dirs_found)))
+                        .size(12.0)
+                        .color(egui::Color32::from_rgb(0xe4, 0xe4, 0xe8)),
                 );
 
                 ui.separator();
@@ -65,7 +57,7 @@ pub fn status_bar(ui: &mut Ui, state: &AppState, theme: &DiskSleuthTheme) {
                 ui.label(
                     egui::RichText::new(format_size(state.scan_total_size))
                         .size(12.0)
-                        .color(theme.accent),
+                        .color(egui::Color32::from_rgb(0x89, 0xb4, 0xfa)),
                 );
 
                 if state.scan_error_count > 0 {
@@ -76,7 +68,7 @@ pub fn status_bar(ui: &mut Ui, state: &AppState, theme: &DiskSleuthTheme) {
                             format_count(state.scan_error_count)
                         ))
                         .size(12.0)
-                        .color(theme.warning),
+                        .color(egui::Color32::from_rgb(0xfa, 0xb3, 0x87)),
                     );
                 }
             }
@@ -88,9 +80,9 @@ pub fn status_bar(ui: &mut Ui, state: &AppState, theme: &DiskSleuthTheme) {
                         "✓ Scan complete"
                     };
                     let status_color = if state.scan_was_cancelled {
-                        theme.warning
+                        egui::Color32::from_rgb(0xfa, 0xb3, 0x87)
                     } else {
-                        theme.success
+                        egui::Color32::from_rgb(0xa6, 0xe3, 0xa1)
                     };
                     ui.label(
                         egui::RichText::new(status_text)
@@ -101,24 +93,22 @@ pub fn status_bar(ui: &mut Ui, state: &AppState, theme: &DiskSleuthTheme) {
                     // Scan tier badge.
                     ui.separator();
                     let tier_label = if state.scan_is_mft { "MFT" } else { "Walk" };
-                    let tier_color = if state.scan_is_mft { theme.accent } else { theme.text_muted };
-                    ui.label(
-                        egui::RichText::new(tier_label)
-                            .size(11.0)
-                            .color(tier_color),
-                    );
+                    let tier_color = if state.scan_is_mft {
+                        egui::Color32::from_rgb(0x89, 0xb4, 0xfa)
+                    } else {
+                        egui::Color32::from_rgb(0x6c, 0x70, 0x86)
+                    };
+                    ui.label(egui::RichText::new(tier_label).size(11.0).color(tier_color));
 
                     ui.separator();
 
                     ui.label(
                         egui::RichText::new(format!(
                             "{} files",
-                            format_count(
-                                tree.nodes.iter().filter(|n| !n.is_dir).count() as u64
-                            )
+                            format_count(tree.nodes.iter().filter(|n| !n.is_dir).count() as u64)
                         ))
                         .size(12.0)
-                        .color(theme.text_primary),
+                        .color(egui::Color32::from_rgb(0xe4, 0xe4, 0xe8)),
                     );
 
                     ui.separator();
@@ -126,7 +116,7 @@ pub fn status_bar(ui: &mut Ui, state: &AppState, theme: &DiskSleuthTheme) {
                     ui.label(
                         egui::RichText::new(format_size(tree.total_size))
                             .size(12.0)
-                            .color(theme.accent),
+                            .color(egui::Color32::from_rgb(0x89, 0xb4, 0xfa)),
                     );
 
                     if let Some(duration) = state.scan_duration {
@@ -134,7 +124,7 @@ pub fn status_bar(ui: &mut Ui, state: &AppState, theme: &DiskSleuthTheme) {
                         ui.label(
                             egui::RichText::new(format!("{:.1}s", duration.as_secs_f64()))
                                 .size(12.0)
-                                .color(theme.text_muted),
+                                .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
                         );
                     }
 
@@ -146,7 +136,7 @@ pub fn status_bar(ui: &mut Ui, state: &AppState, theme: &DiskSleuthTheme) {
                                 format_count(state.scan_error_count)
                             ))
                             .size(12.0)
-                            .color(theme.warning),
+                            .color(egui::Color32::from_rgb(0xfa, 0xb3, 0x87)),
                         );
                     }
                 }

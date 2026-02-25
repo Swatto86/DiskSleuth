@@ -4,7 +4,6 @@
 /// It uses `jwalk`'s rayon-backed parallel traversal to walk the directory tree
 /// at high speed, writing nodes into a shared `LiveTree` so the UI can render
 /// the tree in real time.
-
 use crate::model::{FileNode, NodeIndex};
 use crate::scanner::progress::ScanProgress;
 use crate::scanner::LiveTree;
@@ -57,7 +56,7 @@ pub fn scan_parallel(
     for entry_result in walker {
         // Check cancellation every 1000 entries.
         update_counter += 1;
-        if update_counter % 1000 == 0 && cancel_flag.load(Ordering::Relaxed) {
+        if update_counter.is_multiple_of(1000) && cancel_flag.load(Ordering::Relaxed) {
             let _ = progress_tx.send(ScanProgress::Cancelled);
             return;
         }
@@ -68,7 +67,9 @@ pub fn scan_parallel(
                 error_count += 1;
                 // jwalk errors are typically access-denied on directories.
                 // Extract what path info we can from the error.
-                let err_path = err.path().map(|p| p.to_string_lossy().to_string())
+                let err_path = err
+                    .path()
+                    .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_default();
                 let msg = format!("{err}");
 
@@ -77,7 +78,8 @@ pub fn scan_parallel(
                     if let Some(parent_path) = entry_path.parent() {
                         let parent_idx = dir_map.get(&parent_path.to_path_buf()).copied();
                         if let Some(pidx) = parent_idx {
-                            let name = entry_path.file_name()
+                            let name = entry_path
+                                .file_name()
                                 .map(|n| n.to_string_lossy().to_string())
                                 .unwrap_or_else(|| "<access denied>".to_string());
                             let error_node = FileNode::new_error(
@@ -101,10 +103,7 @@ pub fn scan_parallel(
         };
 
         let path = entry.path();
-        let file_name = entry
-            .file_name()
-            .to_string_lossy()
-            .to_string();
+        let file_name = entry.file_name().to_string_lossy().to_string();
 
         // Skip the root itself (already created).
         if path == root_path {
@@ -163,11 +162,8 @@ pub fn scan_parallel(
                 }
             };
 
-            let mut file_node = FileNode::new_file(
-                CompactString::new(&file_name),
-                size,
-                Some(parent_idx),
-            );
+            let mut file_node =
+                FileNode::new_file(CompactString::new(&file_name), size, Some(parent_idx));
             file_node.modified = modified;
             {
                 let mut tree = live_tree.write();
@@ -180,7 +176,7 @@ pub fn scan_parallel(
         }
 
         // Send progress updates roughly every 5000 entries.
-        if update_counter % 5000 == 0 {
+        if update_counter.is_multiple_of(5000) {
             // Run a quick aggregation so live sizes are visible.
             {
                 let mut tree = live_tree.write();
@@ -239,10 +235,7 @@ fn ensure_ancestors(
         }
     }
 
-    let mut parent_idx = dir_map
-        .get(&current)
-        .copied()
-        .unwrap_or(root_idx);
+    let mut parent_idx = dir_map.get(&current).copied().unwrap_or(root_idx);
 
     for ancestor in missing.into_iter().rev() {
         let name = ancestor

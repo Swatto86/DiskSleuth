@@ -6,9 +6,7 @@
 ///
 /// During scanning, reads from the shared `LiveTree` via a read-lock
 /// so the user can see the tree populate in real time.
-
 use crate::state::{AppPhase, AppState};
-use crate::theme::DiskSleuthTheme;
 use disksleuth_core::model::size::format_size;
 use disksleuth_core::model::FileTree;
 use egui::{Rect, Response, Sense, Ui, Vec2};
@@ -23,24 +21,27 @@ const INDENT_PX: f32 = 20.0;
 ///
 /// Returns the response for the outer scroll area so callers can
 /// detect interactions (e.g. deselect on background click).
-pub fn tree_view(ui: &mut Ui, state: &mut AppState, theme: &DiskSleuthTheme) -> Response {
+pub fn tree_view(ui: &mut Ui, state: &mut AppState) -> Response {
     // ── Check if we have any tree data ─────────────────────────
     let have_final_tree = state.tree.is_some();
-    let have_live_tree = state.live_tree.as_ref().map_or(false, |lt| lt.read().len() > 0);
+    let have_live_tree = state
+        .live_tree
+        .as_ref()
+        .is_some_and(|lt| !lt.read().is_empty());
 
     if !have_final_tree && !have_live_tree {
         if state.phase == AppPhase::Scanning {
             ui.centered_and_justified(|ui| {
                 ui.label(
-                    egui::RichText::new("Scanning… waiting for results")
-                        .color(theme.text_muted),
+                    egui::RichText::new("Scanning... waiting for results")
+                        .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
                 );
             });
         } else {
             ui.centered_and_justified(|ui| {
                 ui.label(
                     egui::RichText::new("No scan results. Select a drive and click Scan.")
-                        .color(theme.text_muted),
+                        .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
                 );
             });
         }
@@ -55,10 +56,10 @@ pub fn tree_view(ui: &mut Ui, state: &mut AppState, theme: &DiskSleuthTheme) -> 
             ui.spinner();
             ui.label(
                 egui::RichText::new(format!(
-                    " Scanning… {} files found",
+                    " Scanning... {} files found",
                     disksleuth_core::model::size::format_count(state.scan_files_found)
                 ))
-                .color(theme.text_secondary)
+                .color(egui::Color32::from_rgb(0xb8, 0xb8, 0xc4))
                 .size(12.0),
             );
         });
@@ -80,7 +81,7 @@ pub fn tree_view(ui: &mut Ui, state: &mut AppState, theme: &DiskSleuthTheme) -> 
             tree = &*live_guard;
         }
 
-        render_tree_rows(ui, state, theme, tree)
+        render_tree_rows(ui, state, tree)
     };
     // tree / live_guard dropped here — safe to mutate state.
 
@@ -102,7 +103,6 @@ pub fn tree_view(ui: &mut Ui, state: &mut AppState, theme: &DiskSleuthTheme) -> 
 fn render_tree_rows(
     ui: &mut Ui,
     state: &AppState,
-    theme: &DiskSleuthTheme,
     tree: &FileTree,
 ) -> (Option<usize>, Option<usize>) {
     let total_rows = state.visible_rows.len();
@@ -124,8 +124,7 @@ fn render_tree_rows(
             let top_y = response.rect.top();
 
             // Determine visible range.
-            let first_visible =
-                ((viewport.top() - top_y) / ROW_HEIGHT).floor().max(0.0) as usize;
+            let first_visible = ((viewport.top() - top_y) / ROW_HEIGHT).floor().max(0.0) as usize;
             let last_visible = ((viewport.bottom() - top_y) / ROW_HEIGHT)
                 .ceil()
                 .min(total_rows as f32) as usize;
@@ -152,7 +151,7 @@ fn render_tree_rows(
                 // Selection highlight.
                 let is_selected = state.selected_node == Some(row.node_index);
                 if is_selected {
-                    painter.rect_filled(row_rect, 0.0, theme.selection);
+                    painter.rect_filled(row_rect, 0.0, egui::Color32::from_rgb(0x28, 0x3a, 0x5c));
                 }
 
                 // Hover highlight.
@@ -163,7 +162,7 @@ fn render_tree_rows(
                 );
 
                 if row_response.hovered() && !is_selected {
-                    painter.rect_filled(row_rect, 0.0, theme.surface_hover);
+                    painter.rect_filled(row_rect, 0.0, egui::Color32::from_rgb(0x35, 0x35, 0x4a));
                 }
 
                 // Click handling.
@@ -213,11 +212,8 @@ fn render_tree_rows(
                         egui::pos2(row_rect.left() + indent - 14.0, row_rect.top()),
                         Vec2::new(16.0, ROW_HEIGHT),
                     );
-                    let arrow_response = ui.interact(
-                        arrow_rect,
-                        ui.id().with(("arrow", row_idx)),
-                        Sense::click(),
-                    );
+                    let arrow_response =
+                        ui.interact(arrow_rect, ui.id().with(("arrow", row_idx)), Sense::click());
                     if arrow_response.clicked() {
                         toggle_row = Some(row_idx);
                     }
@@ -226,17 +222,17 @@ fn render_tree_rows(
                         egui::Align2::LEFT_CENTER,
                         arrow_text,
                         egui::FontId::proportional(11.0),
-                        theme.text_muted,
+                        egui::Color32::from_rgb(0x6c, 0x70, 0x86),
                     );
                 }
 
                 // Icon — error nodes get a warning icon.
                 let (icon, icon_color) = if node.is_error {
-                    ("⚠", theme.warning)
+                    ("⚠", egui::Color32::from_rgb(0xfa, 0xb3, 0x87))
                 } else if node.is_dir {
-                    ("📁", theme.folder_icon)
+                    ("📁", egui::Color32::from_rgb(0xf9, 0xe2, 0xaf))
                 } else {
-                    ("📄", theme.file_icon)
+                    ("📄", egui::Color32::from_rgb(0x89, 0xb4, 0xfa))
                 };
                 painter.text(
                     egui::pos2(text_x, text_y),
@@ -255,15 +251,12 @@ fn render_tree_rows(
 
                 let name_font = egui::FontId::proportional(13.0);
                 let name_color = if node.is_error {
-                    theme.text_muted
+                    egui::Color32::from_rgb(0x6c, 0x70, 0x86)
                 } else {
-                    theme.text_primary
+                    egui::Color32::from_rgb(0xe4, 0xe4, 0xe8)
                 };
-                let name_galley = painter.layout_no_wrap(
-                    name_str.to_string(),
-                    name_font,
-                    name_color,
-                );
+                let name_galley =
+                    painter.layout_no_wrap(name_str.to_string(), name_font, name_color);
 
                 // If the text fits, draw it directly. Otherwise, clip and add ellipsis.
                 let text_width = name_galley.size().x;
@@ -294,7 +287,7 @@ fn render_tree_rows(
                         egui::Align2::LEFT_CENTER,
                         "…",
                         egui::FontId::proportional(13.0),
-                        theme.text_muted,
+                        egui::Color32::from_rgb(0x6c, 0x70, 0x86),
                     );
                 }
 
@@ -306,7 +299,7 @@ fn render_tree_rows(
                     egui::Align2::LEFT_CENTER,
                     &size_text,
                     egui::FontId::proportional(12.0),
-                    theme.text_secondary,
+                    egui::Color32::from_rgb(0xb8, 0xb8, 0xc4),
                 );
 
                 // Percentage.
@@ -316,7 +309,7 @@ fn render_tree_rows(
                     egui::Align2::LEFT_CENTER,
                     &pct_text,
                     egui::FontId::proportional(12.0),
-                    theme.text_muted,
+                    egui::Color32::from_rgb(0x6c, 0x70, 0x86),
                 );
 
                 // Size bar.
@@ -329,32 +322,38 @@ fn render_tree_rows(
                 );
 
                 // Bar background.
-                painter.rect_filled(bar_rect, 2.0, theme.surface);
+                painter.rect_filled(bar_rect, 2.0, egui::Color32::from_rgb(0x2a, 0x2a, 0x3c));
 
                 // Bar fill.
                 let fill_w = bar_width * (node.percent_of_parent / 100.0).clamp(0.0, 1.0);
                 if fill_w > 0.5 {
-                    let fill_rect = Rect::from_min_size(bar_rect.min, Vec2::new(fill_w, bar_height));
-                    let bar_color = theme.bar_color(node.percent_of_parent);
-                    painter.rect_filled(fill_rect, 2.0, bar_color);
+                    let fill_rect =
+                        Rect::from_min_size(bar_rect.min, Vec2::new(fill_w, bar_height));
+                    let t = (node.percent_of_parent / 100.0).clamp(0.0, 1.0);
+                    let r = (0xa6_u8 as f32 + (0xf3_u8 as f32 - 0xa6_u8 as f32) * t) as u8;
+                    let g = (0xe3_u8 as f32 + (0x8b_u8 as f32 - 0xe3_u8 as f32) * t) as u8;
+                    let b = (0xa1_u8 as f32 + (0xa8_u8 as f32 - 0xa1_u8 as f32) * t) as u8;
+                    painter.rect_filled(fill_rect, 2.0, egui::Color32::from_rgb(r, g, b));
                 }
 
                 // File count for directories.
                 if node.is_dir && node.descendant_count > 0 {
-                    let count_text = format!("{} files", disksleuth_core::model::size::format_count(node.descendant_count));
+                    let count_text = format!(
+                        "{} files",
+                        disksleuth_core::model::size::format_count(node.descendant_count)
+                    );
                     painter.text(
                         egui::pos2(bar_x + bar_width + 10.0, text_y),
                         egui::Align2::LEFT_CENTER,
                         &count_text,
                         egui::FontId::proportional(11.0),
-                        theme.text_muted,
+                        egui::Color32::from_rgb(0x6c, 0x70, 0x86),
                     );
                 }
             }
 
             response
-        })
-        .inner;
+        });
 
     (toggle_row, new_selection)
 }

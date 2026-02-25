@@ -2,7 +2,6 @@
 ///
 /// Extracts the largest individual files from a scanned `FileTree`
 /// for display in the analysis panel.
-
 use crate::model::{FileTree, NodeIndex};
 
 /// A single entry in the "largest files" results.

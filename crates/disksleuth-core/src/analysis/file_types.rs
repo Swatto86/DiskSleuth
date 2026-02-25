@@ -2,7 +2,6 @@
 ///
 /// Groups files into broad categories (Documents, Media, Code, Archives,
 /// System, Other) and computes size/count totals per category.
-
 use crate::model::FileTree;
 use std::collections::HashMap;
 
@@ -55,8 +54,9 @@ pub fn categorise_extension(ext: &str) -> FileCategory {
         "jpg" | "jpeg" | "png" | "gif" | "bmp" | "svg" | "webp" | "ico" | "tiff" | "tif"
         | "psd" | "raw" | "cr2" | "nef" | "heic" | "heif" => FileCategory::Images,
         // Video
-        "mp4" | "mkv" | "avi" | "mov" | "wmv" | "flv" | "webm" | "m4v" | "mpg" | "mpeg"
-        | "3gp" => FileCategory::Video,
+        "mp4" | "mkv" | "avi" | "mov" | "wmv" | "flv" | "webm" | "m4v" | "mpg" | "mpeg" | "3gp" => {
+            FileCategory::Video
+        }
         // Audio
         "mp3" | "wav" | "flac" | "aac" | "ogg" | "wma" | "m4a" | "opus" => FileCategory::Audio,
         // Archives
@@ -68,9 +68,7 @@ pub fn categorise_extension(ext: &str) -> FileCategory {
         | "go" | "rb" | "php" | "swift" | "kt" | "scala" | "html" | "css" | "scss" | "json"
         | "xml" | "yaml" | "yml" | "toml" | "sql" | "sh" | "bat" | "ps1" => FileCategory::Code,
         // Executables
-        "exe" | "msi" | "dll" | "so" | "dylib" | "app" | "com" | "scr" => {
-            FileCategory::Executables
-        }
+        "exe" | "msi" | "dll" | "so" | "dylib" | "app" | "com" | "scr" => FileCategory::Executables,
         // System
         "sys" | "drv" | "inf" | "cat" | "log" | "etl" | "dat" | "reg" | "tmp" | "bak" => {
             FileCategory::System
@@ -88,11 +86,7 @@ pub fn analyse_file_types(tree: &FileTree) -> Vec<CategoryStats> {
             continue;
         }
 
-        let ext = node
-            .name
-            .rsplit('.')
-            .next()
-            .unwrap_or("");
+        let ext = node.name.rsplit('.').next().unwrap_or("");
         let cat = categorise_extension(ext);
 
         let entry = map.entry(cat).or_insert_with(|| CategoryStats {

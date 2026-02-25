@@ -9,7 +9,6 @@
 /// - [`scanner`] — Background filesystem scanning with progress reporting.
 /// - [`analysis`] — Post-scan analysis algorithms (top files, file types, etc.).
 /// - [`platform`] — Windows-specific drive enumeration and permission checks.
-
 pub mod analysis;
 pub mod model;
 pub mod platform;

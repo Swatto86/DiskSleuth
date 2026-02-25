@@ -11,6 +11,13 @@
 
 The project builds with **zero errors, zero warnings**.
 
+### Recent changes
+
+- **Removed custom theming engine** (`DiskSleuthTheme`, `ThemeMode`) to eliminate
+  white flash on startup. All 14 source files updated to use hardcoded dark-palette
+  `egui::Color32` values. `theme.rs` deleted. `set_visuals(Visuals::dark())` is now
+  called once in `DiskSleuthApp::new()` — no per-frame `apply()` call.
+
 ---
 
 ## Architecture

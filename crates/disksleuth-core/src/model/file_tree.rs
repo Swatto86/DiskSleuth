@@ -3,7 +3,6 @@
 /// All nodes live in a single `Vec<FileNode>`. Relationships between nodes
 /// use `NodeIndex` (a thin `u32` wrapper) rather than heap pointers, giving
 /// cache-friendly traversal and trivial serialisation.
-
 use super::file_node::{FileNode, NodeIndex};
 use compact_str::CompactString;
 
@@ -141,11 +140,8 @@ impl FileTree {
             .collect();
 
         // Partial sort: we only need the top N.
-        file_indices.sort_unstable_by(|a, b| {
-            self.nodes[b.idx()]
-                .size
-                .cmp(&self.nodes[a.idx()].size)
-        });
+        file_indices
+            .sort_unstable_by(|a, b| self.nodes[b.idx()].size.cmp(&self.nodes[a.idx()].size));
 
         file_indices.truncate(n);
         self.largest_files = file_indices;
@@ -162,10 +158,10 @@ impl FileTree {
         segments.reverse();
 
         // Join with backslash for Windows paths.
-        let path = segments.join("\\");
+
         // If the first segment looks like a drive letter (e.g. "C:"),
         // ensure we have C:\ not C:\\ at the start.
-        path
+        segments.join("\\")
     }
 
     /// Get direct children of a node as a collected Vec, sorted by size descending.
@@ -231,10 +227,18 @@ mod tests {
         let dir = tree.add_node(FileNode::new_dir(CompactString::new("Users"), Some(root)));
         tree.add_child(root, dir);
 
-        let file_a = tree.add_node(FileNode::new_file(CompactString::new("a.txt"), 100, Some(dir)));
+        let file_a = tree.add_node(FileNode::new_file(
+            CompactString::new("a.txt"),
+            100,
+            Some(dir),
+        ));
         tree.add_child(dir, file_a);
 
-        let file_b = tree.add_node(FileNode::new_file(CompactString::new("b.txt"), 200, Some(dir)));
+        let file_b = tree.add_node(FileNode::new_file(
+            CompactString::new("b.txt"),
+            200,
+            Some(dir),
+        ));
         tree.add_child(dir, file_b);
 
         tree.aggregate_sizes();
@@ -252,7 +256,11 @@ mod tests {
         let root = tree.add_root(CompactString::new("C:"));
         let dir = tree.add_node(FileNode::new_dir(CompactString::new("Users"), Some(root)));
         tree.add_child(root, dir);
-        let file = tree.add_node(FileNode::new_file(CompactString::new("test.txt"), 50, Some(dir)));
+        let file = tree.add_node(FileNode::new_file(
+            CompactString::new("test.txt"),
+            50,
+            Some(dir),
+        ));
         tree.add_child(dir, file);
 
         assert_eq!(tree.full_path(file), "C:\\Users\\test.txt");
@@ -263,10 +271,18 @@ mod tests {
         let mut tree = FileTree::with_capacity(5);
         let root = tree.add_root(CompactString::new("C:"));
 
-        let small = tree.add_node(FileNode::new_file(CompactString::new("small.txt"), 10, Some(root)));
+        let small = tree.add_node(FileNode::new_file(
+            CompactString::new("small.txt"),
+            10,
+            Some(root),
+        ));
         tree.add_child(root, small);
 
-        let big = tree.add_node(FileNode::new_file(CompactString::new("big.bin"), 1000, Some(root)));
+        let big = tree.add_node(FileNode::new_file(
+            CompactString::new("big.bin"),
+            1000,
+            Some(root),
+        ));
         tree.add_child(root, big);
 
         let dir = tree.add_node(FileNode::new_dir(CompactString::new("folder"), Some(root)));

@@ -6,14 +6,11 @@
 ///
 /// During scanning, the tree view reads from a **shared `LiveTree`**
 /// (`Arc<RwLock<FileTree>>`) so results appear in real time.
-
 use disksleuth_core::model::{FileTree, NodeIndex};
 use disksleuth_core::platform::DriveInfo;
 use disksleuth_core::scanner::progress::ScanProgress;
 use disksleuth_core::scanner::{LiveTree, ScanHandle};
 use std::time::Duration;
-
-use crate::theme::ThemeMode;
 
 /// The current phase of the application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,9 +36,6 @@ pub struct VisibleRow {
 
 /// All application state.
 pub struct AppState {
-    // ── Theme ──────────────────────────────────────────
-    pub theme_mode: ThemeMode,
-
     // ── Drives ─────────────────────────────────────────
     pub drives: Vec<DriveInfo>,
     pub selected_drive_index: Option<usize>,
@@ -89,6 +83,12 @@ pub struct AppState {
     pub context_menu_node: Option<NodeIndex>,
 }
 
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppState {
     /// Create initial application state.
     pub fn new() -> Self {
@@ -96,7 +96,6 @@ impl AppState {
         let selected = if drives.is_empty() { None } else { Some(0) };
 
         Self {
-            theme_mode: ThemeMode::Dark,
             drives,
             selected_drive_index: selected,
             phase: AppPhase::Idle,
@@ -184,7 +183,10 @@ impl AppState {
         while let Ok(msg) = handle.progress_rx.try_recv() {
             repaint = true;
             match msg {
-                ScanProgress::ScanTier { is_mft, is_elevated } => {
+                ScanProgress::ScanTier {
+                    is_mft,
+                    is_elevated,
+                } => {
                     self.scan_is_mft = is_mft;
                     self.scan_is_elevated = is_elevated;
                 }
@@ -216,17 +218,12 @@ impl AppState {
                     // Take ownership of the final tree from the LiveTree.
                     if let Some(lt) = self.live_tree.take() {
                         // Try to unwrap the Arc; if still shared, clone.
-                        match parking_lot::RwLock::into_inner(
+                        let tree = parking_lot::RwLock::into_inner(
                             std::sync::Arc::try_unwrap(lt)
-                                .unwrap_or_else(|arc| {
-                                    parking_lot::RwLock::new(arc.read().clone())
-                                }),
-                        ) {
-                            tree => {
-                                self.build_initial_visible_rows(&tree);
-                                self.tree = Some(tree);
-                            }
-                        }
+                                .unwrap_or_else(|arc| parking_lot::RwLock::new(arc.read().clone())),
+                        );
+                        self.build_initial_visible_rows(&tree);
+                        self.tree = Some(tree);
                     }
 
                     self.scan_handle = None;
@@ -238,17 +235,12 @@ impl AppState {
 
                     // Preserve whatever has been scanned so far.
                     if let Some(lt) = self.live_tree.take() {
-                        match parking_lot::RwLock::into_inner(
+                        let tree = parking_lot::RwLock::into_inner(
                             std::sync::Arc::try_unwrap(lt)
-                                .unwrap_or_else(|arc| {
-                                    parking_lot::RwLock::new(arc.read().clone())
-                                }),
-                        ) {
-                            tree => {
-                                self.build_initial_visible_rows(&tree);
-                                self.tree = Some(tree);
-                            }
-                        }
+                                .unwrap_or_else(|arc| parking_lot::RwLock::new(arc.read().clone())),
+                        );
+                        self.build_initial_visible_rows(&tree);
+                        self.tree = Some(tree);
                     }
 
                     self.scan_handle = None;
@@ -304,12 +296,12 @@ impl AppState {
     /// stays expanded. New directories at depth 0–1 are auto-expanded.
     fn rebuild_live_visible_rows(&mut self, tree: &FileTree) {
         // Remember which nodes were expanded.
-        let mut expanded_set: std::collections::HashSet<NodeIndex> =
-            self.visible_rows
-                .iter()
-                .filter(|r| r.is_expanded)
-                .map(|r| r.node_index)
-                .collect();
+        let mut expanded_set: std::collections::HashSet<NodeIndex> = self
+            .visible_rows
+            .iter()
+            .filter(|r| r.is_expanded)
+            .map(|r| r.node_index)
+            .collect();
 
         // Always expand roots.
         for &root_idx in &tree.roots {
@@ -428,11 +420,7 @@ impl AppState {
 /// Toggle-expand implementation operating on the visible_rows vec directly.
 ///
 /// Free function to avoid `&mut self` / `&self.tree` borrow conflict.
-fn toggle_expand_inner(
-    visible_rows: &mut Vec<VisibleRow>,
-    row_index: usize,
-    tree: &FileTree,
-) {
+fn toggle_expand_inner(visible_rows: &mut Vec<VisibleRow>, row_index: usize, tree: &FileTree) {
     let row = &visible_rows[row_index];
     let node = tree.node(row.node_index);
 
@@ -446,9 +434,7 @@ fn toggle_expand_inner(
         let parent_depth = row.depth;
         let remove_start = row_index + 1;
         let mut remove_end = remove_start;
-        while remove_end < visible_rows.len()
-            && visible_rows[remove_end].depth > parent_depth
-        {
+        while remove_end < visible_rows.len() && visible_rows[remove_end].depth > parent_depth {
             remove_end += 1;
         }
         visible_rows.drain(remove_start..remove_end);

@@ -1,5 +1,4 @@
 /// Analysis modules — post-scan algorithms for insights.
-
 pub mod age;
 pub mod duplicates;
 pub mod file_types;

@@ -1,10 +1,8 @@
 /// Main `eframe::App` implementation for DiskSleuth.
 ///
 /// This is the top-level UI layout that composes all panels and widgets.
-
 use crate::panels;
 use crate::state::AppState;
-use crate::theme::DiskSleuthTheme;
 use crate::widgets;
 
 /// The DiskSleuth application.
@@ -15,23 +13,19 @@ pub struct DiskSleuthApp {
 impl DiskSleuthApp {
     /// Create a new application instance.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // Apply dark visuals immediately so the very first frame is dark.
+        // Set dark visuals once at startup so the very first frame is dark.
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
-
-        // Apply the full DiskSleuth theme on top.
-        let theme = DiskSleuthTheme::dark();
-        theme.apply(&cc.egui_ctx);
 
         let mut state = AppState::new();
 
         // Auto-scan the OS drive on startup.
         let os_drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
         let os_drive_path = format!("{}\\", os_drive);
-        if let Some(idx) = state
-            .drives
-            .iter()
-            .position(|d| d.path.to_string_lossy().eq_ignore_ascii_case(&os_drive_path))
-        {
+        if let Some(idx) = state.drives.iter().position(|d| {
+            d.path
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&os_drive_path)
+        }) {
             state.selected_drive_index = Some(idx);
             let path = state.drives[idx].path.clone();
             state.start_scan(path);
@@ -43,13 +37,8 @@ impl DiskSleuthApp {
 
 impl eframe::App for DiskSleuthApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-
         // Process any pending scan messages before rendering.
         let _data_changed = self.state.process_scan_messages();
-
-        // Re-apply theme if it changed.
-        let theme = DiskSleuthTheme::for_mode(self.state.theme_mode);
-        theme.apply(ctx);
 
         // Request continuous repaint while scanning (for progress updates).
         if self.state.phase == crate::state::AppPhase::Scanning {
@@ -61,7 +50,7 @@ impl eframe::App for DiskSleuthApp {
             .min_height(36.0)
             .show(ctx, |ui| {
                 ui.add_space(4.0);
-                widgets::toolbar::toolbar(ui, &mut self.state, &theme);
+                widgets::toolbar::toolbar(ui, &mut self.state);
                 ui.add_space(4.0);
             });
 
@@ -80,23 +69,23 @@ impl eframe::App for DiskSleuthApp {
                         egui::RichText::new("🔍 DiskSleuth")
                             .size(24.0)
                             .strong()
-                            .color(theme.accent),
+                            .color(egui::Color32::from_rgb(0x89, 0xb4, 0xfa)),
                     );
                     ui.add_space(4.0);
                     ui.label(
                         egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
                             .size(13.0)
-                            .color(theme.text_muted),
+                            .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
                     );
                     ui.add_space(12.0);
                     ui.label(
                         egui::RichText::new(
                             "A fast, visual disk space analyser for Windows.\n\
                              Parallel scanning, SpaceSniffer-style treemap,\n\
-                             and an interactive tree view."
+                             and an interactive tree view.",
                         )
                         .size(12.0)
-                        .color(theme.text_secondary),
+                        .color(egui::Color32::from_rgb(0xb8, 0xb8, 0xc4)),
                     );
                     ui.add_space(12.0);
                     ui.separator();
@@ -105,7 +94,7 @@ impl eframe::App for DiskSleuthApp {
                         egui::RichText::new("Developed by Swatto")
                             .size(13.0)
                             .strong()
-                            .color(theme.text_primary),
+                            .color(egui::Color32::from_rgb(0xe4, 0xe4, 0xe8)),
                     );
                     ui.add_space(4.0);
                     ui.hyperlink_to(
@@ -114,22 +103,22 @@ impl eframe::App for DiskSleuthApp {
                     );
                     ui.add_space(4.0);
                     ui.label(
-                        egui::RichText::new("MIT License · © 2026 Swatto")
+                        egui::RichText::new("MIT License - (c) 2026 Swatto")
                             .size(11.0)
-                            .color(theme.text_muted),
+                            .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
                     );
                     ui.add_space(4.0);
                     ui.label(
                         egui::RichText::new("Built with Rust & egui")
                             .size(11.0)
-                            .color(theme.text_muted),
+                            .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
                     );
                     ui.add_space(2.0);
                     ui.label(
                         egui::RichText::new("with a little sprinkling of help from SteveO")
                             .size(10.0)
                             .italics()
-                            .color(theme.text_muted),
+                            .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
                     );
                     ui.add_space(8.0);
                 });
@@ -141,7 +130,7 @@ impl eframe::App for DiskSleuthApp {
             .min_height(24.0)
             .show(ctx, |ui| {
                 ui.add_space(2.0);
-                widgets::status_bar::status_bar(ui, &self.state, &theme);
+                widgets::status_bar::status_bar(ui, &self.state);
                 ui.add_space(2.0);
             });
 
@@ -153,11 +142,11 @@ impl eframe::App for DiskSleuthApp {
             .resizable(true)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    panels::scan_panel::scan_panel(ui, &mut self.state, &theme);
+                    panels::scan_panel::scan_panel(ui, &mut self.state);
                     ui.add_space(8.0);
                     ui.separator();
                     ui.add_space(4.0);
-                    panels::tree_panel::tree_panel(ui, &mut self.state, &theme);
+                    panels::tree_panel::tree_panel(ui, &mut self.state);
                 });
             });
 
@@ -169,18 +158,18 @@ impl eframe::App for DiskSleuthApp {
             .resizable(true)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    panels::details_panel::details_panel(ui, &self.state, &theme);
+                    panels::details_panel::details_panel(ui, &self.state);
                     ui.add_space(16.0);
                     ui.separator();
                     ui.add_space(8.0);
-                    panels::chart_panel::chart_panel(ui, &self.state, &theme);
+                    panels::chart_panel::chart_panel(ui, &self.state);
                 });
             });
 
         // ── Central panel (Treemap) ───────────────────────────────
         egui::CentralPanel::default().show(ctx, |ui| {
             use widgets::treemap::TreemapAction;
-            if let Some(act) = widgets::treemap::treemap(ui, &self.state, &theme) {
+            if let Some(act) = widgets::treemap::treemap(ui, &self.state) {
                 match act {
                     TreemapAction::NavigateDir(node) => {
                         self.state.treemap_navigate_to(node);

@@ -1,7 +1,7 @@
-/// Size formatting utilities — human-readable byte counts.
-///
-/// All internal sizes are `u64` bytes. Floating point is only used
-/// at the display-formatting boundary.
+//! Size formatting utilities -- human-readable byte counts.
+//!
+//! All internal sizes are `u64` bytes. Floating point is only used
+//! at the display-formatting boundary.
 
 /// Format a byte count into a human-readable string with appropriate unit.
 ///

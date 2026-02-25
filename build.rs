@@ -1,5 +1,5 @@
-/// Build script — generates the application icon and embeds Windows
-/// application manifest and icon resource.
+//! Build script -- generates the application icon and embeds Windows
+//! application manifest and icon resource.
 
 fn main() {
     // Generate icon if it does not already exist.
@@ -135,7 +135,7 @@ fn rgba_to_ico_bmp(rgba: &[u8], size: u32) -> Vec<u8> {
     }
 
     // AND mask (1 bpp, bottom-to-top, rows padded to 4-byte boundary).
-    let row_bytes = ((size + 31) / 32) * 4;
+    let row_bytes = size.div_ceil(32) * 4;
     for y in (0..size).rev() {
         let mut row = vec![0u8; row_bytes as usize];
         for x in 0..size {
@@ -200,7 +200,11 @@ fn render_icon_rgba(size: u32) -> Vec<u8> {
             if dist < radius + 1.5 {
                 let edge_aa = ico_smooth_edge(dist, radius);
                 let angle_deg = dy.atan2(dx).to_degrees();
-                let angle_deg = if angle_deg < 0.0 { angle_deg + 360.0 } else { angle_deg };
+                let angle_deg = if angle_deg < 0.0 {
+                    angle_deg + 360.0
+                } else {
+                    angle_deg
+                };
 
                 let mut seg_col = segments[0].2;
                 for &(start, end, col) in segments {
@@ -277,33 +281,55 @@ fn render_icon_rgba(size: u32) -> Vec<u8> {
 
 fn ico_smooth_edge(dist: f32, edge: f32) -> f32 {
     let d = dist - edge;
-    if d < -1.0 { 1.0 } else if d > 1.0 { 0.0 } else { 0.5 - d * 0.5 }
+    if d < -1.0 {
+        1.0
+    } else if d > 1.0 {
+        0.0
+    } else {
+        0.5 - d * 0.5
+    }
 }
 fn ico_smooth_edge_inv(dist: f32, edge: f32) -> f32 {
     let d = dist - edge;
-    if d < -1.0 { 0.0 } else if d > 1.0 { 1.0 } else { 0.5 + d * 0.5 }
+    if d < -1.0 {
+        0.0
+    } else if d > 1.0 {
+        1.0
+    } else {
+        0.5 + d * 0.5
+    }
 }
 fn ico_boundary_factor(angle: f32, boundaries: &[f32]) -> f32 {
     let gap = 2.5;
     let mut f = 0.0f32;
     for &b in boundaries {
         let mut d = (angle - b).abs();
-        if d > 180.0 { d = 360.0 - d; }
-        if d < gap { f = f.max(1.0 - d / gap); }
+        if d > 180.0 {
+            d = 360.0 - d;
+        }
+        if d < gap {
+            f = f.max(1.0 - d / gap);
+        }
     }
     f
 }
 fn ico_pt_seg_dist(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
-    let abx = bx - ax; let aby = by - ay;
+    let abx = bx - ax;
+    let aby = by - ay;
     let len_sq = abx * abx + aby * aby;
-    if len_sq < 0.0001 { return ((px - ax).powi(2) + (py - ay).powi(2)).sqrt(); }
+    if len_sq < 0.0001 {
+        return ((px - ax).powi(2) + (py - ay).powi(2)).sqrt();
+    }
     let t = (((px - ax) * abx + (py - ay) * aby) / len_sq).clamp(0.0, 1.0);
     ((px - (ax + t * abx)).powi(2) + (py - (ay + t * aby)).powi(2)).sqrt()
 }
 fn ico_project_t(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
-    let abx = bx - ax; let aby = by - ay;
+    let abx = bx - ax;
+    let aby = by - ay;
     let len_sq = abx * abx + aby * aby;
-    if len_sq < 0.0001 { return 0.0; }
+    if len_sq < 0.0001 {
+        return 0.0;
+    }
     ((px - ax) * abx + (py - ay) * aby) / len_sq
 }
 fn ico_lerp(a: u8, b: u8, t: f32) -> u8 {

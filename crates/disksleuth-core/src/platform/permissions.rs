@@ -2,7 +2,6 @@
 ///
 /// Some features (MFT direct reading) require the process to run
 /// with administrator privileges.
-
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};

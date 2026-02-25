@@ -1,7 +1,6 @@
 /// Duplicate file detection (size-first, then partial hash, then full hash).
 ///
 /// Phase 2 feature — stub for now with the public API defined.
-
 use crate::model::{FileTree, NodeIndex};
 
 /// A group of files that are duplicates of each other.

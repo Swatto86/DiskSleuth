@@ -1,6 +1,5 @@
 /// Scan progress reporting — lightweight messages sent from the scan
 /// thread to the UI thread via a crossbeam channel.
-
 use std::time::Duration;
 
 /// Commands sent from the UI thread to control the scanner.
@@ -33,10 +32,7 @@ pub enum ScanProgress {
         current_path: String,
     },
     /// A non-fatal error (e.g. permission denied on one file).
-    Error {
-        path: String,
-        message: String,
-    },
+    Error { path: String, message: String },
     /// Scanning completed successfully.
     /// The finished tree is in the shared `LiveTree` (already aggregated).
     Complete {

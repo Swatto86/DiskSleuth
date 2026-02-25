@@ -1,6 +1,5 @@
 /// Platform-specific functionality — Windows drive enumeration,
 /// permission checks, and system utilities.
-
 pub mod drives;
 pub mod permissions;
 
