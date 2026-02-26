@@ -96,7 +96,7 @@ pub fn treemap(ui: &mut Ui, state: &AppState) -> Option<TreemapAction> {
         ui.centered_and_justified(|ui| {
             ui.label(
                 egui::RichText::new("No scan results. Select a drive and click Scan.")
-                    .color(Color32::from_rgb(0x6c, 0x70, 0x86)),
+                    .color(ui.visuals().weak_text_color()),
             );
         });
         return None;
@@ -115,7 +115,10 @@ pub fn treemap(ui: &mut Ui, state: &AppState) -> Option<TreemapAction> {
     }
 
     let root = &tree.nodes[root_node.idx()];
-    let is_light = false;
+
+    // Derive light/dark from egui visuals so all rendering adapts correctly
+    // when the user toggles the theme toggle in the toolbar.
+    let is_light = !ui.visuals().dark_mode;
 
     let mut action: Option<TreemapAction> = None;
 
@@ -174,7 +177,7 @@ pub fn treemap(ui: &mut Ui, state: &AppState) -> Option<TreemapAction> {
             if i > 0 {
                 ui.label(
                     egui::RichText::new(" › ")
-                        .color(Color32::from_rgb(0x6c, 0x70, 0x86))
+                        .color(ui.visuals().weak_text_color())
                         .size(12.0),
                 );
             }
@@ -182,12 +185,12 @@ pub fn treemap(ui: &mut Ui, state: &AppState) -> Option<TreemapAction> {
             let is_current = bc_node == root_node;
             let text = if is_current {
                 egui::RichText::new(name.as_str())
-                    .color(Color32::from_rgb(0xe4, 0xe4, 0xe8))
+                    .color(ui.visuals().text_color())
                     .size(12.0)
                     .strong()
             } else {
                 egui::RichText::new(name.as_str())
-                    .color(Color32::from_rgb(0x89, 0xb4, 0xfa))
+                    .color(ui.visuals().hyperlink_color)
                     .size(12.0)
             };
             let resp = ui.add(egui::Label::new(text).sense(Sense::click()));
@@ -202,7 +205,7 @@ pub fn treemap(ui: &mut Ui, state: &AppState) -> Option<TreemapAction> {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
                 egui::RichText::new(format_size(root.size))
-                    .color(Color32::from_rgb(0x89, 0xb4, 0xfa))
+                    .color(ui.visuals().hyperlink_color)
                     .size(12.0),
             );
         });

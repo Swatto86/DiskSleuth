@@ -9,7 +9,9 @@
 /// - [`scanner`] — Background filesystem scanning with progress reporting.
 /// - [`analysis`] — Post-scan analysis algorithms (top files, file types, etc.).
 /// - [`platform`] — Windows-specific drive enumeration and permission checks.
+/// - [`monitor`] — Live file-write monitor using Windows ReadDirectoryChangesW.
 pub mod analysis;
 pub mod model;
+pub mod monitor;
 pub mod platform;
 pub mod scanner;

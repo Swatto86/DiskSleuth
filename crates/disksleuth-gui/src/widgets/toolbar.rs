@@ -1,16 +1,17 @@
-/// Top action bar -- scan controls and app branding.
+/// Top action bar -- scan controls, theme toggle, monitor toggle, and branding.
 use crate::state::{AppPhase, AppState};
 use egui::Ui;
 
 /// Draw the toolbar.
 pub fn toolbar(ui: &mut Ui, state: &mut AppState) {
     ui.horizontal(|ui| {
-        // App title.
+        // App title -- uses the egui accent/hyperlink colour so it adapts to
+        // dark and light mode automatically.
         ui.label(
             egui::RichText::new("🔍 DiskSleuth")
                 .size(18.0)
                 .strong()
-                .color(egui::Color32::from_rgb(0x89, 0xb4, 0xfa)),
+                .color(ui.visuals().hyperlink_color),
         );
 
         ui.separator();
@@ -59,12 +60,48 @@ pub fn toolbar(ui: &mut Ui, state: &mut AppState) {
             // Phase 2: implement CSV/JSON export.
         }
 
-        // Spacer.
+        // Right-aligned controls.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // About button.
             if ui.button("ℹ").on_hover_text("About DiskSleuth").clicked() {
                 state.show_about = true;
             }
+
+            // ── Theme toggle (☀ light / 🌙 dark) ──────────────────
+            let theme_label = if state.dark_mode { "☀" } else { "🌙" };
+            let theme_tip = if state.dark_mode {
+                "Switch to light mode"
+            } else {
+                "Switch to dark mode"
+            };
+            if ui.button(theme_label).on_hover_text(theme_tip).clicked() {
+                state.dark_mode = !state.dark_mode;
+            }
+
+            ui.separator();
+
+            // ── Live write monitor toggle ─────────────────────────
+            let monitor_label = if state.monitor_active {
+                egui::RichText::new("👁 Monitoring").color(
+                    egui::Color32::from_rgb(0xa6, 0xe3, 0xa1), // green active indicator
+                )
+            } else {
+                egui::RichText::new("👁 Monitor")
+            };
+            let monitor_tip = if state.show_monitor_panel {
+                "Hide write monitor panel"
+            } else {
+                "Show live file write monitor"
+            };
+            if ui
+                .button(monitor_label)
+                .on_hover_text(monitor_tip)
+                .clicked()
+            {
+                state.show_monitor_panel = !state.show_monitor_panel;
+            }
+
+            ui.separator();
 
             // Elevation indicator.
             let elevated = disksleuth_core::platform::is_elevated();

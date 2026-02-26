@@ -17,7 +17,7 @@ pub fn scan_panel(ui: &mut Ui, state: &mut AppState) {
                 "{} files found",
                 disksleuth_core::model::size::format_count(state.scan_files_found)
             ))
-            .color(egui::Color32::from_rgb(0xb8, 0xb8, 0xc4)),
+            .color(ui.visuals().weak_text_color()),
         );
     }
 

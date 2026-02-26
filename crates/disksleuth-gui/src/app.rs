@@ -50,31 +50,85 @@ impl DiskSleuthApp {
     /// The state should have been constructed by [`DiskSleuthState::build()`]
     /// *before* `eframe::run_native` is called.
     pub fn with_state(cc: &eframe::CreationContext<'_>, state: DiskSleuthState) -> Self {
-        // Apply dark visuals -- egui defaults to dark anyway, but being
-        // explicit ensures the very first frame uses the right palette.
+        // ── Font: Segoe UI ────────────────────────────────────────────────
+        // Load Segoe UI from the Windows fonts directory and register it as
+        // the highest-priority proportional font so every widget uses it.
+        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+        let font_path = format!("{}\\Fonts\\segoeui.ttf", system_root);
+
+        let mut fonts = egui::FontDefinitions::default();
+        match std::fs::read(&font_path) {
+            Ok(bytes) => {
+                fonts.font_data.insert(
+                    "SegoeUI".to_owned(),
+                    egui::FontData::from_owned(bytes).into(),
+                );
+                // Highest priority in proportional family.
+                fonts
+                    .families
+                    .entry(egui::FontFamily::Proportional)
+                    .or_default()
+                    .insert(0, "SegoeUI".to_owned());
+                // Also use for monospace labels (file paths, etc.).
+                fonts
+                    .families
+                    .entry(egui::FontFamily::Monospace)
+                    .or_default()
+                    .insert(0, "SegoeUI".to_owned());
+                tracing::info!("Loaded Segoe UI from {}", font_path);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Could not load Segoe UI from {}: {} -- using default font",
+                    font_path,
+                    e
+                );
+            }
+        }
+        cc.egui_ctx.set_fonts(fonts);
+
+        // Apply initial dark visuals.
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
+
         Self { state: state.inner }
     }
 }
 
 impl eframe::App for DiskSleuthApp {
-    /// Override the GPU clear colour to match the dark theme background,
-    /// preventing the white flash on startup.
-    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        // Match DiskSleuthTheme::dark().background = rgb(0x1e, 0x1e, 0x2e)
-        [0.118, 0.118, 0.180, 1.0]
+    /// Override the GPU clear colour to match the active theme background,
+    /// preventing a colour mismatch flash between frames.
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        let [r, g, b, a] = visuals.panel_fill.to_array();
+        [
+            r as f32 / 255.0,
+            g as f32 / 255.0,
+            b as f32 / 255.0,
+            a as f32 / 255.0,
+        ]
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Process any pending scan messages before rendering.
-        let _data_changed = self.state.process_scan_messages();
+        // ── Apply theme ───────────────────────────────────────────────────
+        // Called every frame so that toggling dark_mode takes effect
+        // immediately on the next rendered frame.
+        if self.state.dark_mode {
+            ctx.set_visuals(egui::Visuals::dark());
+        } else {
+            ctx.set_visuals(egui::Visuals::light());
+        }
 
-        // Request continuous repaint while scanning (for progress updates).
-        if self.state.phase == crate::state::AppPhase::Scanning {
+        // ── Process background messages ───────────────────────────────────
+        let _data_changed = self.state.process_scan_messages();
+        let _monitor_changed = self.state.process_monitor_messages();
+
+        // Request continuous repaint while scanning or monitoring.
+        let needs_repaint =
+            self.state.phase == crate::state::AppPhase::Scanning || self.state.monitor_active;
+        if needs_repaint {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
 
-        // ── Top toolbar ───────────────────────────────────────────
+        // ── Top toolbar ───────────────────────────────────────────────────
         egui::TopBottomPanel::top("toolbar")
             .min_height(36.0)
             .show(ctx, |ui| {
@@ -83,7 +137,7 @@ impl eframe::App for DiskSleuthApp {
                 ui.add_space(4.0);
             });
 
-        // ── About dialog ──────────────────────────────────────────
+        // ── About dialog ──────────────────────────────────────────────────
         let mut show_about = self.state.show_about;
         egui::Window::new("About DiskSleuth")
             .open(&mut show_about)
@@ -92,19 +146,26 @@ impl eframe::App for DiskSleuthApp {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .fixed_size([340.0, 0.0])
             .show(ctx, |ui| {
+                // Use theme-aware colours so the dialog looks correct in both
+                // dark and light mode.
+                let accent = ui.visuals().hyperlink_color;
+                let muted = ui.visuals().weak_text_color();
+                let normal = ui.visuals().text_color();
+                let strong = ui.visuals().strong_text_color();
+
                 ui.vertical_centered(|ui| {
                     ui.add_space(8.0);
                     ui.label(
                         egui::RichText::new("🔍 DiskSleuth")
                             .size(24.0)
                             .strong()
-                            .color(egui::Color32::from_rgb(0x89, 0xb4, 0xfa)),
+                            .color(accent),
                     );
                     ui.add_space(4.0);
                     ui.label(
                         egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
                             .size(13.0)
-                            .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
+                            .color(muted),
                     );
                     ui.add_space(12.0);
                     ui.label(
@@ -114,7 +175,7 @@ impl eframe::App for DiskSleuthApp {
                              and an interactive tree view.",
                         )
                         .size(12.0)
-                        .color(egui::Color32::from_rgb(0xb8, 0xb8, 0xc4)),
+                        .color(normal),
                     );
                     ui.add_space(12.0);
                     ui.separator();
@@ -123,7 +184,7 @@ impl eframe::App for DiskSleuthApp {
                         egui::RichText::new("Developed by Swatto")
                             .size(13.0)
                             .strong()
-                            .color(egui::Color32::from_rgb(0xe4, 0xe4, 0xe8)),
+                            .color(strong),
                     );
                     ui.add_space(4.0);
                     ui.hyperlink_to(
@@ -134,27 +195,27 @@ impl eframe::App for DiskSleuthApp {
                     ui.label(
                         egui::RichText::new("MIT License - (c) 2026 Swatto")
                             .size(11.0)
-                            .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
+                            .color(muted),
                     );
                     ui.add_space(4.0);
                     ui.label(
                         egui::RichText::new("Built with Rust & egui")
                             .size(11.0)
-                            .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
+                            .color(muted),
                     );
                     ui.add_space(2.0);
                     ui.label(
                         egui::RichText::new("with a little sprinkling of help from SteveO")
                             .size(10.0)
                             .italics()
-                            .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
+                            .color(muted),
                     );
                     ui.add_space(8.0);
                 });
             });
         self.state.show_about = show_about;
 
-        // ── Bottom status bar ─────────────────────────────────────
+        // ── Bottom status bar ─────────────────────────────────────────────
         egui::TopBottomPanel::bottom("status_bar")
             .min_height(24.0)
             .show(ctx, |ui| {
@@ -163,7 +224,21 @@ impl eframe::App for DiskSleuthApp {
                 ui.add_space(2.0);
             });
 
-        // ── Left sidebar ──────────────────────────────────────────
+        // ── Live write monitor panel (optional bottom panel) ──────────────
+        if self.state.show_monitor_panel {
+            egui::TopBottomPanel::bottom("monitor_panel")
+                .resizable(true)
+                .default_height(200.0)
+                .min_height(120.0)
+                .max_height(500.0)
+                .show(ctx, |ui| {
+                    ui.add_space(4.0);
+                    panels::monitor_panel::monitor_panel(ui, &mut self.state);
+                    ui.add_space(4.0);
+                });
+        }
+
+        // ── Left sidebar ──────────────────────────────────────────────────
         egui::SidePanel::left("left_panel")
             .default_width(500.0)
             .min_width(300.0)
@@ -179,7 +254,7 @@ impl eframe::App for DiskSleuthApp {
                 });
             });
 
-        // ── Right details panel ───────────────────────────────────
+        // ── Right details panel ───────────────────────────────────────────
         egui::SidePanel::right("right_panel")
             .default_width(220.0)
             .min_width(180.0)
@@ -195,7 +270,7 @@ impl eframe::App for DiskSleuthApp {
                 });
             });
 
-        // ── Central panel (Treemap) ───────────────────────────────
+        // ── Central panel (Treemap) ───────────────────────────────────────
         egui::CentralPanel::default().show(ctx, |ui| {
             use widgets::treemap::TreemapAction;
             if let Some(act) = widgets::treemap::treemap(ui, &self.state) {

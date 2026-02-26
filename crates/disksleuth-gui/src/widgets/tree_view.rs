@@ -34,14 +34,14 @@ pub fn tree_view(ui: &mut Ui, state: &mut AppState) -> Response {
             ui.centered_and_justified(|ui| {
                 ui.label(
                     egui::RichText::new("Scanning... waiting for results")
-                        .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
+                        .color(ui.visuals().weak_text_color()),
                 );
             });
         } else {
             ui.centered_and_justified(|ui| {
                 ui.label(
                     egui::RichText::new("No scan results. Select a drive and click Scan.")
-                        .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
+                        .color(ui.visuals().weak_text_color()),
                 );
             });
         }
@@ -59,7 +59,7 @@ pub fn tree_view(ui: &mut Ui, state: &mut AppState) -> Response {
                     " Scanning... {} files found",
                     disksleuth_core::model::size::format_count(state.scan_files_found)
                 ))
-                .color(egui::Color32::from_rgb(0xb8, 0xb8, 0xc4))
+                .color(ui.visuals().weak_text_color())
                 .size(12.0),
             );
         });
@@ -105,6 +105,35 @@ fn render_tree_rows(
     state: &AppState,
     tree: &FileTree,
 ) -> (Option<usize>, Option<usize>) {
+    // ── Extract theme-adaptive colours once ─────────────────────────────
+    // Using visuals here avoids scattering dark/light conditionals across the
+    // painter calls below.
+    let is_dark = ui.visuals().dark_mode;
+    let color_weak = ui.visuals().weak_text_color();
+    let color_normal = ui.visuals().text_color();
+    let color_selection = ui.visuals().selection.bg_fill;
+    // Hover: slightly opaque panel tint that works on both light and dark.
+    let color_hover = if is_dark {
+        egui::Color32::from_rgb(0x35, 0x35, 0x4a)
+    } else {
+        egui::Color32::from_rgba_unmultiplied(
+            color_selection.r(),
+            color_selection.g(),
+            color_selection.b(),
+            40,
+        )
+    };
+    // Bar track background.
+    let color_bar_bg = if is_dark {
+        egui::Color32::from_rgb(0x2a, 0x2a, 0x3c)
+    } else {
+        egui::Color32::from_gray(210)
+    };
+    // Icon colours are kept vivid (they read fine on both themes).
+    let color_warning = egui::Color32::from_rgb(0xfa, 0xb3, 0x87);
+    let color_folder = egui::Color32::from_rgb(0xf9, 0xe2, 0xaf);
+    let color_file = egui::Color32::from_rgb(0x89, 0xb4, 0xfa);
+
     let total_rows = state.visible_rows.len();
     let total_height = total_rows as f32 * ROW_HEIGHT;
 
@@ -151,7 +180,7 @@ fn render_tree_rows(
                 // Selection highlight.
                 let is_selected = state.selected_node == Some(row.node_index);
                 if is_selected {
-                    painter.rect_filled(row_rect, 0.0, egui::Color32::from_rgb(0x28, 0x3a, 0x5c));
+                    painter.rect_filled(row_rect, 0.0, color_selection);
                 }
 
                 // Hover highlight.
@@ -162,7 +191,7 @@ fn render_tree_rows(
                 );
 
                 if row_response.hovered() && !is_selected {
-                    painter.rect_filled(row_rect, 0.0, egui::Color32::from_rgb(0x35, 0x35, 0x4a));
+                    painter.rect_filled(row_rect, 0.0, color_hover);
                 }
 
                 // Click handling.
@@ -222,17 +251,17 @@ fn render_tree_rows(
                         egui::Align2::LEFT_CENTER,
                         arrow_text,
                         egui::FontId::proportional(11.0),
-                        egui::Color32::from_rgb(0x6c, 0x70, 0x86),
+                        color_weak,
                     );
                 }
 
                 // Icon — error nodes get a warning icon.
                 let (icon, icon_color) = if node.is_error {
-                    ("⚠", egui::Color32::from_rgb(0xfa, 0xb3, 0x87))
+                    ("⚠", color_warning)
                 } else if node.is_dir {
-                    ("📁", egui::Color32::from_rgb(0xf9, 0xe2, 0xaf))
+                    ("📁", color_folder)
                 } else {
-                    ("📄", egui::Color32::from_rgb(0x89, 0xb4, 0xfa))
+                    ("📄", color_file)
                 };
                 painter.text(
                     egui::pos2(text_x, text_y),
@@ -251,9 +280,9 @@ fn render_tree_rows(
 
                 let name_font = egui::FontId::proportional(13.0);
                 let name_color = if node.is_error {
-                    egui::Color32::from_rgb(0x6c, 0x70, 0x86)
+                    color_weak
                 } else {
-                    egui::Color32::from_rgb(0xe4, 0xe4, 0xe8)
+                    color_normal
                 };
                 let name_galley =
                     painter.layout_no_wrap(name_str.to_string(), name_font, name_color);
@@ -287,7 +316,7 @@ fn render_tree_rows(
                         egui::Align2::LEFT_CENTER,
                         "…",
                         egui::FontId::proportional(13.0),
-                        egui::Color32::from_rgb(0x6c, 0x70, 0x86),
+                        color_weak,
                     );
                 }
 
@@ -299,7 +328,7 @@ fn render_tree_rows(
                     egui::Align2::LEFT_CENTER,
                     &size_text,
                     egui::FontId::proportional(12.0),
-                    egui::Color32::from_rgb(0xb8, 0xb8, 0xc4),
+                    color_weak,
                 );
 
                 // Percentage.
@@ -309,7 +338,7 @@ fn render_tree_rows(
                     egui::Align2::LEFT_CENTER,
                     &pct_text,
                     egui::FontId::proportional(12.0),
-                    egui::Color32::from_rgb(0x6c, 0x70, 0x86),
+                    color_weak,
                 );
 
                 // Size bar.
@@ -322,7 +351,7 @@ fn render_tree_rows(
                 );
 
                 // Bar background.
-                painter.rect_filled(bar_rect, 2.0, egui::Color32::from_rgb(0x2a, 0x2a, 0x3c));
+                painter.rect_filled(bar_rect, 2.0, color_bar_bg);
 
                 // Bar fill.
                 let fill_w = bar_width * (node.percent_of_parent / 100.0).clamp(0.0, 1.0);
@@ -347,7 +376,7 @@ fn render_tree_rows(
                         egui::Align2::LEFT_CENTER,
                         &count_text,
                         egui::FontId::proportional(11.0),
-                        egui::Color32::from_rgb(0x6c, 0x70, 0x86),
+                        color_weak,
                     );
                 }
             }

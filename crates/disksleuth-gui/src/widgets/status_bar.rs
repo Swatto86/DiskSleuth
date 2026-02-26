@@ -5,14 +5,17 @@ use egui::Ui;
 
 /// Draw the status bar at the bottom of the window.
 pub fn status_bar(ui: &mut Ui, state: &AppState) {
+    // Extract theme-adaptive colours once for this frame.
+    let color_accent = ui.visuals().hyperlink_color;
+    let color_weak = ui.visuals().weak_text_color();
+    let color_normal = ui.visuals().text_color();
+    let color_warning = egui::Color32::from_rgb(0xfa, 0xb3, 0x87);
+    let color_success = egui::Color32::from_rgb(0xa6, 0xe3, 0xa1);
+
     ui.horizontal(|ui| {
         match state.phase {
             AppPhase::Idle => {
-                ui.label(
-                    egui::RichText::new("Ready")
-                        .size(12.0)
-                        .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
-                );
+                ui.label(egui::RichText::new("Ready").size(12.0).color(color_weak));
             }
             AppPhase::Scanning => {
                 // Animated spinner.
@@ -21,9 +24,9 @@ pub fn status_bar(ui: &mut Ui, state: &AppState) {
                 // Scan tier badge.
                 let tier_label = if state.scan_is_mft { "MFT" } else { "Walk" };
                 let tier_color = if state.scan_is_mft {
-                    egui::Color32::from_rgb(0x89, 0xb4, 0xfa)
+                    color_accent
                 } else {
-                    egui::Color32::from_rgb(0x6c, 0x70, 0x86)
+                    color_weak
                 };
                 ui.label(egui::RichText::new(tier_label).size(11.0).color(tier_color));
                 ui.separator();
@@ -33,7 +36,7 @@ pub fn status_bar(ui: &mut Ui, state: &AppState) {
                 ui.label(
                     egui::RichText::new(format!("Scanning {}...", display_path))
                         .size(12.0)
-                        .color(egui::Color32::from_rgb(0xb8, 0xb8, 0xc4)),
+                        .color(color_normal),
                 );
 
                 ui.separator();
@@ -41,7 +44,7 @@ pub fn status_bar(ui: &mut Ui, state: &AppState) {
                 ui.label(
                     egui::RichText::new(format!("{} files", format_count(state.scan_files_found)))
                         .size(12.0)
-                        .color(egui::Color32::from_rgb(0xe4, 0xe4, 0xe8)),
+                        .color(color_normal),
                 );
 
                 ui.separator();
@@ -49,7 +52,7 @@ pub fn status_bar(ui: &mut Ui, state: &AppState) {
                 ui.label(
                     egui::RichText::new(format!("{} dirs", format_count(state.scan_dirs_found)))
                         .size(12.0)
-                        .color(egui::Color32::from_rgb(0xe4, 0xe4, 0xe8)),
+                        .color(color_normal),
                 );
 
                 ui.separator();
@@ -57,7 +60,7 @@ pub fn status_bar(ui: &mut Ui, state: &AppState) {
                 ui.label(
                     egui::RichText::new(format_size(state.scan_total_size))
                         .size(12.0)
-                        .color(egui::Color32::from_rgb(0x89, 0xb4, 0xfa)),
+                        .color(color_accent),
                 );
 
                 if state.scan_error_count > 0 {
@@ -68,21 +71,21 @@ pub fn status_bar(ui: &mut Ui, state: &AppState) {
                             format_count(state.scan_error_count)
                         ))
                         .size(12.0)
-                        .color(egui::Color32::from_rgb(0xfa, 0xb3, 0x87)),
+                        .color(color_warning),
                     );
                 }
             }
             AppPhase::Results => {
                 if let Some(ref tree) = state.tree {
                     let status_text = if state.scan_was_cancelled {
-                        "⏹ Scan stopped (partial results)"
+                        "\u{23f9} Scan stopped (partial results)"
                     } else {
-                        "✓ Scan complete"
+                        "\u{2713} Scan complete"
                     };
                     let status_color = if state.scan_was_cancelled {
-                        egui::Color32::from_rgb(0xfa, 0xb3, 0x87)
+                        color_warning
                     } else {
-                        egui::Color32::from_rgb(0xa6, 0xe3, 0xa1)
+                        color_success
                     };
                     ui.label(
                         egui::RichText::new(status_text)
@@ -94,9 +97,9 @@ pub fn status_bar(ui: &mut Ui, state: &AppState) {
                     ui.separator();
                     let tier_label = if state.scan_is_mft { "MFT" } else { "Walk" };
                     let tier_color = if state.scan_is_mft {
-                        egui::Color32::from_rgb(0x89, 0xb4, 0xfa)
+                        color_accent
                     } else {
-                        egui::Color32::from_rgb(0x6c, 0x70, 0x86)
+                        color_weak
                     };
                     ui.label(egui::RichText::new(tier_label).size(11.0).color(tier_color));
 
@@ -108,7 +111,7 @@ pub fn status_bar(ui: &mut Ui, state: &AppState) {
                             format_count(tree.nodes.iter().filter(|n| !n.is_dir).count() as u64)
                         ))
                         .size(12.0)
-                        .color(egui::Color32::from_rgb(0xe4, 0xe4, 0xe8)),
+                        .color(color_normal),
                     );
 
                     ui.separator();
@@ -116,7 +119,7 @@ pub fn status_bar(ui: &mut Ui, state: &AppState) {
                     ui.label(
                         egui::RichText::new(format_size(tree.total_size))
                             .size(12.0)
-                            .color(egui::Color32::from_rgb(0x89, 0xb4, 0xfa)),
+                            .color(color_accent),
                     );
 
                     if let Some(duration) = state.scan_duration {
@@ -124,7 +127,7 @@ pub fn status_bar(ui: &mut Ui, state: &AppState) {
                         ui.label(
                             egui::RichText::new(format!("{:.1}s", duration.as_secs_f64()))
                                 .size(12.0)
-                                .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
+                                .color(color_weak),
                         );
                     }
 
@@ -136,7 +139,7 @@ pub fn status_bar(ui: &mut Ui, state: &AppState) {
                                 format_count(state.scan_error_count)
                             ))
                             .size(12.0)
-                            .color(egui::Color32::from_rgb(0xfa, 0xb3, 0x87)),
+                            .color(color_warning),
                         );
                     }
                 }

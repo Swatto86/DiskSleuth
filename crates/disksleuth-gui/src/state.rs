@@ -7,6 +7,7 @@
 /// During scanning, the tree view reads from a **shared `LiveTree`**
 /// (`Arc<RwLock<FileTree>>`) so results appear in real time.
 use disksleuth_core::model::{FileTree, NodeIndex};
+use disksleuth_core::monitor::{MonitorHandle, WriteEvent};
 use disksleuth_core::platform::DriveInfo;
 use disksleuth_core::scanner::progress::ScanProgress;
 use disksleuth_core::scanner::{LiveTree, ScanHandle};
@@ -81,6 +82,21 @@ pub struct AppState {
     pub show_about: bool,
     pub scan_errors: Vec<(String, String)>,
     pub context_menu_node: Option<NodeIndex>,
+    // ── Theme ──────────────────────────────────────────────
+    /// `true` = dark mode (default), `false` = light mode.
+    pub dark_mode: bool,
+
+    // ── Live write monitor ─────────────────────────────────
+    /// Whether the monitor bottom panel is visible.
+    pub show_monitor_panel: bool,
+    /// Whether the monitor is actively watching.
+    pub monitor_active: bool,
+    /// Drive/path currently being monitored.
+    pub monitor_path: String,
+    /// Aggregated write events (capped at `MAX_MONITOR_ENTRIES`).
+    pub monitor_entries: Vec<WriteEvent>,
+    /// Handle to the background monitor thread.
+    pub monitor_handle: Option<MonitorHandle>,
 }
 
 impl Default for AppState {
@@ -122,6 +138,12 @@ impl AppState {
             show_about: false,
             scan_errors: Vec::new(),
             context_menu_node: None,
+            dark_mode: true,
+            show_monitor_panel: false,
+            monitor_active: false,
+            monitor_path: String::new(),
+            monitor_entries: Vec::new(),
+            monitor_handle: None,
         }
     }
 
@@ -157,6 +179,75 @@ impl AppState {
         if let Some(ref handle) = self.scan_handle {
             handle.cancel();
         }
+    }
+
+    /// Start the live write monitor on `path`.
+    ///
+    /// Stops any previously running monitor first.
+    pub fn start_monitor(&mut self, path: std::path::PathBuf) {
+        self.stop_monitor();
+        let path_str = path.to_string_lossy().into_owned();
+        let handle = disksleuth_core::monitor::start_monitor(path);
+        self.monitor_handle = Some(handle);
+        self.monitor_active = true;
+        self.monitor_path = path_str;
+        self.monitor_entries.clear();
+    }
+
+    /// Stop the live write monitor.
+    pub fn stop_monitor(&mut self) {
+        if let Some(ref h) = self.monitor_handle {
+            h.stop();
+        }
+        self.monitor_handle = None;
+        self.monitor_active = false;
+    }
+
+    /// Drain pending monitor messages and update `monitor_entries`.
+    ///
+    /// Called once per frame; returns `true` if the UI should repaint.
+    pub fn process_monitor_messages(&mut self) -> bool {
+        let handle = match &self.monitor_handle {
+            Some(h) => h,
+            None => return false,
+        };
+
+        let mut repaint = false;
+        while let Ok(msg) = handle.receiver.try_recv() {
+            repaint = true;
+            match msg {
+                disksleuth_core::monitor::MonitorMessage::FileChanged(path) => {
+                    // Update existing entry or insert new one.
+                    if let Some(entry) = self.monitor_entries.iter_mut().find(|e| e.path == path) {
+                        entry.hit_count += 1;
+                        entry.last_seen = chrono::Local::now();
+                    } else {
+                        // Evict oldest entry when at capacity.
+                        if self.monitor_entries.len()
+                            >= disksleuth_core::monitor::MAX_MONITOR_ENTRIES
+                        {
+                            // Remove the entry with the oldest last_seen timestamp.
+                            if let Some(pos) = self
+                                .monitor_entries
+                                .iter()
+                                .enumerate()
+                                .min_by_key(|(_, e)| e.last_seen)
+                                .map(|(i, _)| i)
+                            {
+                                self.monitor_entries.remove(pos);
+                            }
+                        }
+                        self.monitor_entries
+                            .push(disksleuth_core::monitor::WriteEvent {
+                                path,
+                                hit_count: 1,
+                                last_seen: chrono::Local::now(),
+                            });
+                    }
+                }
+            }
+        }
+        repaint
     }
 
     /// Get a reference to the best available tree.
