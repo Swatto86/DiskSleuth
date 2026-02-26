@@ -192,10 +192,20 @@ pub fn monitor_panel(ui: &mut Ui, state: &mut AppState) {
 /// Truncate a path from the left so it fits within `max_chars` characters.
 ///
 /// Returns the original string if it already fits, or `"...\\<end>"` if not.
+/// Uses character counts rather than byte lengths to avoid panicking on
+/// multi-byte UTF-8 paths (Cyrillic, CJK, accented characters, etc.).
 fn truncate_path_left(path: &str, max_chars: usize) -> String {
-    if path.len() <= max_chars {
+    let char_count = path.chars().count();
+    if char_count <= max_chars {
         return path.to_owned();
     }
-    let suffix = &path[path.len().saturating_sub(max_chars - 4)..];
-    format!("...\\{}", suffix)
+    // Keep the rightmost (max_chars - 4) chars so the "...\" prefix fits.
+    let keep = max_chars.saturating_sub(4);
+    let skip = char_count.saturating_sub(keep);
+    let byte_start = path
+        .char_indices()
+        .nth(skip)
+        .map(|(i, _)| i)
+        .unwrap_or(path.len());
+    format!("...\\{}", &path[byte_start..])
 }

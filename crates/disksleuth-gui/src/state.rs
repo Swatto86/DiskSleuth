@@ -35,6 +35,33 @@ pub struct VisibleRow {
     pub is_expanded: bool,
 }
 
+/// Maximum number of scan-progress messages drained from the channel per frame.
+///
+/// Prevents a backlog (e.g. after the window was hidden) from blocking the
+/// render thread for a perceptible duration when it is eventually shown again.
+const MAX_MESSAGES_PER_FRAME: usize = 300;
+
+/// Maximum entries in the treemap back/forward navigation history stacks.
+///
+/// Prevents unbounded growth under rapid or scripted navigation.
+const MAX_NAV_HISTORY: usize = 50;
+
+/// Maximum monitor messages drained per frame.
+///
+/// Prevents a write-heavy directory (e.g. a compiler output folder) from
+/// stalling the render thread when the message backlog is processed after
+/// the window is restored.  The monitor channel is bounded(2048), so this
+/// caps worst-case per-frame work to 200 eviction/insert operations.
+const MAX_MONITOR_MESSAGES_PER_FRAME: usize = 200;
+
+/// Maximum rows in the virtualised tree-view visible-rows list.
+///
+/// Each `VisibleRow` is 8 bytes (NodeIndex u32 + depth u16 + bool + pad).
+/// At 500 000 rows that is ~4 MB — acceptable — but prevents runaway
+/// growth on fully-expanded multi-million-node trees. Users can collapse
+/// nodes to explore deeper subtrees.
+const MAX_VISIBLE_ROWS: usize = 500_000;
+
 /// All application state.
 pub struct AppState {
     // ── Drives ─────────────────────────────────────────
@@ -206,6 +233,9 @@ impl AppState {
     /// Drain pending monitor messages and update `monitor_entries`.
     ///
     /// Called once per frame; returns `true` if the UI should repaint.
+    /// Capped at [`MAX_MONITOR_MESSAGES_PER_FRAME`] messages per call so that
+    /// a backlog (e.g. after window restore during an active compilation)
+    /// cannot stall the render thread.
     pub fn process_monitor_messages(&mut self) -> bool {
         let handle = match &self.monitor_handle {
             Some(h) => h,
@@ -213,7 +243,13 @@ impl AppState {
         };
 
         let mut repaint = false;
-        while let Ok(msg) = handle.receiver.try_recv() {
+        let mut messages_this_frame = 0usize;
+        while messages_this_frame < MAX_MONITOR_MESSAGES_PER_FRAME {
+            let msg = match handle.receiver.try_recv() {
+                Ok(m) => m,
+                Err(_) => break,
+            };
+            messages_this_frame += 1;
             repaint = true;
             match msg {
                 disksleuth_core::monitor::MonitorMessage::FileChanged(path) => {
@@ -270,8 +306,16 @@ impl AppState {
 
         let mut repaint = false;
 
-        // Drain all available messages without blocking.
-        while let Ok(msg) = handle.progress_rx.try_recv() {
+        // Drain available messages without blocking, subject to a per-frame
+        // budget so a large backlog (window restored after being hidden) cannot
+        // stall the render thread for a perceptible duration.
+        let mut messages_this_frame = 0usize;
+        while messages_this_frame < MAX_MESSAGES_PER_FRAME {
+            let msg = match handle.progress_rx.try_recv() {
+                Ok(m) => m,
+                Err(_) => break,
+            };
+            messages_this_frame += 1;
             repaint = true;
             match msg {
                 ScanProgress::ScanTier {
@@ -359,10 +403,17 @@ impl AppState {
     }
 
     /// Build the initial visible rows from the tree roots (post-scan).
+    ///
+    /// Expands root + its immediate children. Respects [`MAX_VISIBLE_ROWS`] so
+    /// drives with millions of direct root-level entries don't allocate an
+    /// unbounded Vec.
     fn build_initial_visible_rows(&mut self, tree: &FileTree) {
         self.visible_rows.clear();
 
         for &root_idx in &tree.roots {
+            if self.visible_rows.len() >= MAX_VISIBLE_ROWS {
+                break;
+            }
             self.visible_rows.push(VisibleRow {
                 node_index: root_idx,
                 depth: 0,
@@ -372,6 +423,9 @@ impl AppState {
             // Expand root's children by default.
             let children = tree.children_sorted_by_size(root_idx);
             for child_idx in children {
+                if self.visible_rows.len() >= MAX_VISIBLE_ROWS {
+                    break;
+                }
                 self.visible_rows.push(VisibleRow {
                     node_index: child_idx,
                     depth: 1,
@@ -407,6 +461,9 @@ impl AppState {
     }
 
     /// Recursively build visible rows, respecting expanded state.
+    ///
+    /// Stops inserting once [`MAX_VISIBLE_ROWS`] is reached so the live tree
+    /// view does not allocate unbounded memory on fully-expanded deep trees.
     fn build_live_rows_recursive(
         &mut self,
         tree: &FileTree,
@@ -414,6 +471,11 @@ impl AppState {
         depth: u16,
         expanded: &std::collections::HashSet<NodeIndex>,
     ) {
+        // Hard cap: stop adding rows once the limit is reached.
+        if self.visible_rows.len() >= MAX_VISIBLE_ROWS {
+            return;
+        }
+
         let is_expanded = expanded.contains(&node_idx) && tree.node(node_idx).is_dir;
 
         self.visible_rows.push(VisibleRow {
@@ -532,13 +594,16 @@ fn toggle_expand_inner(visible_rows: &mut Vec<VisibleRow>, row_index: usize, tre
         visible_rows[row_index].is_expanded = false;
     } else {
         // EXPAND: insert sorted children immediately after this row.
+        // Respect MAX_VISIBLE_ROWS: only add as many children as headroom allows.
         let node_idx = row.node_index;
         let child_depth = row.depth + 1;
         let children = tree.children_sorted_by_size(node_idx);
         let insert_pos = row_index + 1;
+        let headroom = MAX_VISIBLE_ROWS.saturating_sub(visible_rows.len());
 
         let new_rows: Vec<VisibleRow> = children
             .into_iter()
+            .take(headroom)
             .map(|child_idx| VisibleRow {
                 node_index: child_idx,
                 depth: child_depth,
@@ -568,6 +633,10 @@ impl AppState {
         });
         if let Some(cur) = current {
             if cur != node {
+                // Evict oldest entry when the history stack is at capacity.
+                if self.treemap_back.len() >= MAX_NAV_HISTORY {
+                    self.treemap_back.remove(0);
+                }
                 self.treemap_back.push(cur);
             }
         }
@@ -579,6 +648,9 @@ impl AppState {
     pub fn treemap_go_back(&mut self) {
         if let Some(prev) = self.treemap_back.pop() {
             if let Some(cur) = self.treemap_root {
+                if self.treemap_forward.len() >= MAX_NAV_HISTORY {
+                    self.treemap_forward.remove(0);
+                }
                 self.treemap_forward.push(cur);
             }
             self.treemap_root = Some(prev);
@@ -589,6 +661,9 @@ impl AppState {
     pub fn treemap_go_forward(&mut self) {
         if let Some(next) = self.treemap_forward.pop() {
             if let Some(cur) = self.treemap_root {
+                if self.treemap_back.len() >= MAX_NAV_HISTORY {
+                    self.treemap_back.remove(0);
+                }
                 self.treemap_back.push(cur);
             }
             self.treemap_root = Some(next);
@@ -599,6 +674,10 @@ impl AppState {
     pub fn treemap_go_up(&mut self, tree: &FileTree) {
         if let Some(root) = self.treemap_root {
             if let Some(parent) = tree.nodes[root.idx()].parent {
+                // Cap the back stack consistent with all other nav methods.
+                if self.treemap_back.len() >= MAX_NAV_HISTORY {
+                    self.treemap_back.remove(0);
+                }
                 self.treemap_back.push(root);
                 self.treemap_forward.clear();
                 self.treemap_root = Some(parent);

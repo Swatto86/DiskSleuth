@@ -29,8 +29,8 @@ pub fn find_stale_files(tree: &FileTree, min_age_days: u64, max_results: usize) 
             let age = now.duration_since(modified).ok()?;
             if age >= threshold {
                 Some(StaleFile {
-                    index: NodeIndex(i as u32),
-                    path: tree.full_path(NodeIndex(i as u32)),
+                    index: NodeIndex::new(i),
+                    path: tree.full_path(NodeIndex::new(i)),
                     size: node.size,
                     last_modified: modified,
                     age_days: age.as_secs() / 86400,

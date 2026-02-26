@@ -16,7 +16,7 @@
 /// Set `handle.cancel` to `true` (via `handle.stop()`).  The background thread
 /// polls the flag every 200 ms between I/O waits and exits gracefully.
 use crossbeam_channel::{bounded, Receiver, Sender};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tracing::{debug, warn};
@@ -152,8 +152,10 @@ fn run_monitor(path: PathBuf, cancel: Arc<AtomicBool>, tx: Sender<MonitorMessage
         // Prepare a fresh OVERLAPPED each iteration.  The kernel event lives
         // for the lifetime of the outer loop, so the OVERLAPPED only needs to
         // survive until the operation completes (or is cancelled) below.
-        let mut overlapped = OVERLAPPED::default();
-        overlapped.hEvent = io_event;
+        let mut overlapped = OVERLAPPED {
+            hEvent: io_event,
+            ..Default::default()
+        };
 
         // Reset the event before issuing the next request.
         unsafe {
@@ -198,7 +200,7 @@ fn run_monitor(path: PathBuf, cancel: Arc<AtomicBool>, tx: Sender<MonitorMessage
             if wait.0 == 0 {
                 // WAIT_OBJECT_0 — IO completed.
                 let result = unsafe {
-                    GetOverlappedResult(dir_handle, &mut overlapped, &mut bytes_transferred, false)
+                    GetOverlappedResult(dir_handle, &overlapped, &mut bytes_transferred, false)
                 };
                 if result.is_err() {
                     // Typically overflow (buffer too small) — skip and retry.
@@ -238,7 +240,7 @@ fn run_monitor(path: PathBuf, cancel: Arc<AtomicBool>, tx: Sender<MonitorMessage
 fn parse_and_send_events(
     buffer: &[u8],
     total_bytes: usize,
-    base_path: &PathBuf,
+    base_path: &Path,
     tx: &Sender<MonitorMessage>,
 ) {
     let mut offset = 0usize;

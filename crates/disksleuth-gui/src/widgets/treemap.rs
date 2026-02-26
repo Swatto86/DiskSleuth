@@ -23,6 +23,13 @@ const MAX_NEST_DEPTH: usize = 6;
 /// Minimum rectangle area (px²) to bother drawing.
 const MIN_RECT_AREA: f32 = 24.0;
 
+/// Maximum number of rectangles retained in the treemap per frame.
+///
+/// Screen geometry already bounds this (MIN_RECT_AREA = 24 px² gives ~83 000
+/// rects on a 1080p display), but this constant is an explicit safety net for
+/// very large displays or unusually wide/shallow trees.
+const MAX_TREEMAP_RECTS: usize = 75_000;
+
 /// Height of the directory header bar.
 const HEADER_H: f32 = 16.0;
 
@@ -518,10 +525,19 @@ pub fn treemap(ui: &mut Ui, state: &AppState) -> Option<TreemapAction> {
 // ── Helpers ─────────────────────────────────────────────────────────
 
 fn truncate_name(name: &str, max_chars: usize) -> String {
-    if name.len() > max_chars && max_chars > 3 {
-        format!("{}…", &name[..max_chars.min(name.len()) - 1])
+    // Use char count, not byte length: slicing by bytes panics on multi-byte
+    // UTF-8 filenames (Cyrillic, CJK, emoji, accented latin, etc.).
+    let char_count = name.chars().count();
+    if char_count > max_chars && max_chars > 3 {
+        // Byte index of the (max_chars - 1)th character.
+        let end = name
+            .char_indices()
+            .nth(max_chars - 1)
+            .map(|(i, _)| i)
+            .unwrap_or(name.len());
+        format!("{}\u{2026}", &name[..end])
     } else {
-        name.to_string()
+        name.to_owned()
     }
 }
 
@@ -590,6 +606,10 @@ fn squarify_nested(
     rects: &mut Vec<TreemapRect>,
 ) {
     if items.is_empty() || bounds.width() < 2.0 || bounds.height() < 2.0 {
+        return;
+    }
+    // Stop layout once the per-frame rect budget is exhausted.
+    if rects.len() >= MAX_TREEMAP_RECTS {
         return;
     }
 

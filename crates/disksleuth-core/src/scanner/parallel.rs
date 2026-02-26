@@ -39,6 +39,11 @@ pub fn scan_parallel(
     };
 
     // Map from directory path to its NodeIndex in the arena.
+    //
+    // This map is scan-lifetime only (dropped when `scan_parallel` returns).
+    // Memory is proportional to unique directory count. If an entry is ever
+    // not found, `ensure_ancestors` recreates the missing chain from root, so
+    // correctness is maintained even if this map were to be evicted.
     let mut dir_map: HashMap<PathBuf, NodeIndex> = HashMap::with_capacity(100_000);
     dir_map.insert(root_path.clone(), root_idx);
 
@@ -177,10 +182,11 @@ pub fn scan_parallel(
 
         // Send progress updates roughly every 5000 entries.
         if update_counter.is_multiple_of(5000) {
-            // Run a quick aggregation so live sizes are visible.
+            // Run a lightweight aggregation (no expensive file-sort) so live
+            // sizes are visible without blocking the scanner for long.
             {
                 let mut tree = live_tree.write();
-                tree.aggregate_sizes();
+                tree.aggregate_sizes_live();
             }
 
             let _ = progress_tx.send(ScanProgress::Update {

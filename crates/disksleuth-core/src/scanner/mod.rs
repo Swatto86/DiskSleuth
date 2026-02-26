@@ -57,8 +57,17 @@ impl ScanHandle {
 ///
 /// Returns a `ScanHandle` for receiving progress, accessing the live tree,
 /// and requesting cancellation.
+/// Maximum number of progress messages that may queue up in the channel.
+///
+/// The UI drains this channel once per frame (~60 fps). At 60 fps a burst of
+/// 4 096 messages gives the scanner >68 seconds of headroom before back-pressure
+/// causes `send` to block. If the UI falls behind (hidden window, resizing)
+/// the scanner stalls briefly rather than consuming unbounded heap.
+pub const PROGRESS_CHANNEL_CAPACITY: usize = 4_096;
+
 pub fn start_scan(root_path: PathBuf) -> ScanHandle {
-    let (progress_tx, progress_rx) = crossbeam_channel::unbounded::<ScanProgress>();
+    let (progress_tx, progress_rx) =
+        crossbeam_channel::bounded::<ScanProgress>(PROGRESS_CHANNEL_CAPACITY);
     let cancel_flag = Arc::new(AtomicBool::new(false));
     let cancel_clone = cancel_flag.clone();
 

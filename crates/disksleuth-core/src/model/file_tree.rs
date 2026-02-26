@@ -62,6 +62,17 @@ impl FileTree {
         self.nodes[parent.idx()].first_child = Some(child);
     }
 
+    /// Lightweight aggregation pass used during live scanning.
+    ///
+    /// Performs the same bottom-up size/count/percentage roll-up as
+    /// [`aggregate_sizes`] but deliberately skips the expensive
+    /// `compute_largest_files` sort pass (O(n log n) over all file nodes).
+    /// Call this every N entries while the scan is running; call the full
+    /// [`aggregate_sizes`] only once on the completed tree.
+    pub fn aggregate_sizes_live(&mut self) {
+        self.aggregate_sizes_inner(false);
+    }
+
     /// Compute sizes, descendant counts, and percentages in a single bottom-up pass.
     ///
     /// Because children are always inserted after their parent in the arena
@@ -71,7 +82,16 @@ impl FileTree {
     ///
     /// Safe to call repeatedly (e.g. during a live scan) — directory sizes
     /// are reset before each pass so values don't accumulate.
+    ///
+    /// Calls `compute_largest_files` after aggregation. For incremental live
+    /// use, prefer [`aggregate_sizes_live`] to avoid the O(n log n) sort.
     pub fn aggregate_sizes(&mut self) {
+        self.aggregate_sizes_inner(true);
+    }
+
+    /// Internal implementation shared by [`aggregate_sizes`] and
+    /// [`aggregate_sizes_live`].
+    fn aggregate_sizes_inner(&mut self, compute_largest: bool) {
         // Reset directory aggregation fields so repeated calls don't
         // accumulate on top of previous values.
         for node in self.nodes.iter_mut() {
@@ -125,8 +145,12 @@ impl FileTree {
         // Total size across all roots.
         self.total_size = self.roots.iter().map(|r| self.nodes[r.idx()].size).sum();
 
-        // Build top-N largest files list.
-        self.compute_largest_files(100);
+        // Build top-N largest files list — skipped during live incremental scans
+        // because sorting all file indices is O(n log n) and too expensive to run
+        // every N entries while the scan thread is actively inserting nodes.
+        if compute_largest {
+            self.compute_largest_files(100);
+        }
     }
 
     /// Find the N largest individual files by size.

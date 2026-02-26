@@ -46,6 +46,14 @@ use windows::Win32::System::Ioctl::{
     FSCTL_ENUM_USN_DATA, FSCTL_GET_NTFS_VOLUME_DATA, NTFS_VOLUME_DATA_BUFFER,
 };
 
+/// Maximum number of MFT records buffered before the scan is truncated.
+///
+/// A typical consumer NTFS volume has 200k–2M records. Drives with tens of
+/// millions of small files (mail servers, source-control repos, etc.) can
+/// exceed this bound. When hit, the scan is terminated gracefully rather than
+/// exhausting heap memory.
+pub const MAX_MFT_RECORDS: usize = 15_000_000;
+
 /// Check whether MFT direct reading is available for the given path.
 ///
 /// Requirements:
@@ -208,7 +216,9 @@ pub fn scan_mft(
     let mut output_buf = vec![0u8; 64 * 1024];
     let mut update_counter: u64 = 0;
 
-    loop {
+    // The label allows the inner USN-record parsing loop to break all the way
+    // out of the outer DeviceIoControl loop when the record cap is hit.
+    'mft_enum: loop {
         if cancel_flag.load(Ordering::Relaxed) {
             unsafe {
                 let _ = CloseHandle(handle);
@@ -302,6 +312,22 @@ pub fn scan_mft(
             // Mask to 48-bit MFT reference (lower 48 bits = record number).
             let file_ref_48 = file_ref & 0x0000_FFFF_FFFF_FFFF;
             let parent_ref_48 = parent_ref & 0x0000_FFFF_FFFF_FFFF;
+
+            // Guard against unbounded memory growth on pathologically large
+            // volumes (e.g. mail servers with tens of millions of tiny files).
+            if records.len() >= MAX_MFT_RECORDS {
+                tracing::warn!("MFT record limit ({MAX_MFT_RECORDS}) reached — truncating scan");
+                let _ = progress_tx.send(ScanProgress::Error {
+                    path: root_path.to_string_lossy().to_string(),
+                    message: format!(
+                        "Scan truncated: volume contains more than {MAX_MFT_RECORDS} MFT records. \
+                         Only the first {MAX_MFT_RECORDS} entries are shown."
+                    ),
+                });
+                // Exit the outer DeviceIoControl loop, not just this inner
+                // USN-record parsing loop.
+                break 'mft_enum;
+            }
 
             records.push(MftEntry {
                 file_ref: file_ref_48,
