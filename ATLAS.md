@@ -435,8 +435,96 @@ The toolbar reads this cached field rather than issuing three Win32 syscalls on
 every render frame.  Elevation status is immutable for the lifetime of a process,
 so caching is always correct.
 
+### 11.10 MFT enumeration — no per-record heap allocation (mft.rs)
+
+The hot `FSCTL_ENUM_USN_DATA` parsing loop previously allocated two heap objects
+per USN record: a `Vec<u16>` for the UTF-16 name bytes and a `String` for the
+decoded text.  For a 2M-file volume this was 4M allocations in a tight loop.
+
+Both are eliminated: `char::decode_utf16()` iterates over the raw byte slice
+directly and `collect::<CompactString>()` decodes in a single pass.  For the
+vast majority of filenames (≤ 15 UTF-8 bytes) `CompactString` stores the result
+inline without any heap allocation at all.  Longer names allocate a single
+object instead of two.
+
+**Impact:** eliminates 4M heap allocs per scan; reduces peak resident set size
+on MFT-path scans.
+
+### 11.11 MFT IOCTL buffer — 64 KB → 256 KB (mft.rs)
+
+The `DeviceIoControl` output buffer for `FSCTL_ENUM_USN_DATA` was 64 KB.
+Increasing it to 256 KB delivers four times as many MFT records per syscall,
+reducing the number of kernel transitions by up to 75% on high-inode volumes.
+
+**Impact:** measurable reduction in kernel-mode time for NTFS volumes with
+millions of small files.
+
+### 11.12 `FileTree::file_count` — O(1) render-thread stat (file_tree.rs / status_bar.rs)
+
+The status bar previously computed file count via
+`tree.nodes.iter().filter(|n| !n.is_dir).count()` on every egui frame (60 fps).
+On a 2M-node tree this is 120M node reads per second on the render thread.
+
+A `pub file_count: u64` field is now maintained inside `aggregate_sizes_inner`,
+which already iterates all nodes to reset directory fields.  The counter is set
+during that O(n) pass at no additional asymptotic cost.  Render frames read the
+cached scalar.
+
+**Invariant:** `file_count` is only authoritative after `aggregate_sizes()` or
+`aggregate_sizes_live()` has been called.  It is initialised to zero and
+represents all non-directory nodes (including error file nodes) as per the
+pre-existing status bar semantics.
+
+**Impact:** O(n) per frame → O(1) per frame; eliminates ~120M node loads/sec
+in the Results phase.
+
+### 11.13 `truncate_name` — zero-copy for non-truncated names (treemap.rs)
+
+The treemap header and file label renderer calls `truncate_name` on every
+visible rect per frame (up to 75 000 rects).  The function previously returned
+`String::to_owned()` even when no truncation was needed — allocating for every
+name that already fit.
+
+Return type changed to `Cow<'_, str>`: the `Borrowed` variant returns a slice
+into the existing `CompactString` with no allocation; the `Owned` variant
+allocates only when the name is actually truncated.  The vast majority of
+visible names fit without truncation so almost all calls now take the zero-copy
+path.
+
+### 11.14 `TreemapRect::name` — `CompactString` instead of `String` (treemap.rs)
+
+Each `TreemapRect` previously held `name: String` set via `.to_string()` on the
+node's `CompactString` name.  Changed to `name: CompactString` and `clone()`.
+For the common short-name case the clone is an inline copy with no heap
+allocation.
+
+### 11.15 `squarify_nested` scratch buffers — hoisted out of inner loop (treemap.rs)
+
+Two `Vec` allocations occurred inside the greedy-row-building inner loop:
+`row: Vec<usize>` and `trial: Vec<f32>`.  They were re-created on every row
+iteration via `vec![idx]` and `.collect()` respectively.
+
+Both are now declared once before the outer `while idx < items.len()` loop and
+reused with `.clear()` + `.push()` / `.extend()`.  The allocator sees at most
+two allocations per `squarify_nested` call; capacity is preserved across
+iterations.  Because `squarify_nested` is called recursively (one call per
+visible directory, with `capacity(32)` warmup), this eliminates O(rects) heap
+allocs per frame entirely from the greedy step.
+
+### 11.16 `rebuild_live_visible_rows` — pre-sized `HashSet` (state.rs)
+
+The `HashSet<NodeIndex>` used to track expanded nodes was constructed from a
+filtered iterator whose lower-bound size hint is 0, causing `HashSet::default()`
+to start with a small backing table and rehash up to O(log n) times.
+
+It is now created with `HashSet::with_capacity(approx_expanded + roots + 8)`
+where `approx_expanded` is the count of currently expanded rows.  This
+eliminates all rehashes for typical trees and reduces allocator pressure during
+live-scan updates (which fire every few seconds on an active scan).
+
 ---
 
-*Last updated: 2026-03-01 — codebase audit: 4 bugs fixed (age.rs usize underflow,
-monitor bounds check, is_elevated per-frame syscall, start_scan orphan thread).*
+*Last updated: 2026-03-01 — performance review: 7 measurable improvements across MFT
+scanner, FileTree aggregation, treemap rendering, and live-scan state
+management (see §11.10 – §11.16).*
 

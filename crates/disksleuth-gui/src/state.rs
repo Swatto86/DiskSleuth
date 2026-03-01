@@ -481,12 +481,25 @@ impl AppState {
     /// stays expanded. New directories at depth 0–1 are auto-expanded.
     fn rebuild_live_visible_rows(&mut self, tree: &FileTree) {
         // Remember which nodes were expanded.
-        let mut expanded_set: std::collections::HashSet<NodeIndex> = self
+        //
+        // Pre-size the HashSet to the upper bound of expanded rows + roots
+        // so the initial inserts never trigger a rehash.  The lower bound is
+        // 8 so tiny trees (first few hundred nodes) also get a good allocation.
+        let approx_expanded = self
             .visible_rows
             .iter()
             .filter(|r| r.is_expanded)
-            .map(|r| r.node_index)
-            .collect();
+            .count()
+            .max(8)
+            + tree.roots.len();
+        let mut expanded_set: std::collections::HashSet<NodeIndex> =
+            std::collections::HashSet::with_capacity(approx_expanded);
+        expanded_set.extend(
+            self.visible_rows
+                .iter()
+                .filter(|r| r.is_expanded)
+                .map(|r| r.node_index),
+        );
 
         // Always expand roots.
         for &root_idx in &tree.roots {

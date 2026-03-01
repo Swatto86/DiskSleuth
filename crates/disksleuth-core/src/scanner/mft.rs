@@ -213,7 +213,9 @@ pub fn scan_mft(
         high_usn: i64::MAX,
     };
 
-    let mut output_buf = vec![0u8; 64 * 1024];
+    // 256 KB gives 4x more records per DeviceIoControl call vs the old 64 KB,
+    // reducing syscall overhead on high-inode volumes by up to 75%.
+    let mut output_buf = vec![0u8; 256 * 1024];
     let mut update_counter: u64 = 0;
 
     // The label allows the inner USN-record parsing loop to break all the way
@@ -301,11 +303,17 @@ pub fn scan_mft(
                 continue;
             }
 
-            let name_u16: Vec<u16> = output_buf[name_start..name_end]
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                .collect();
-            let file_name = String::from_utf16_lossy(&name_u16);
+            // Decode UTF-16 directly into a CompactString without an
+            // intermediate Vec<u16> or String allocation.
+            // For typical filenames (≤15 bytes UTF-8) CompactString stores
+            // the result inline with no heap allocation at all.
+            let file_name: CompactString = char::decode_utf16(
+                output_buf[name_start..name_end]
+                    .chunks_exact(2)
+                    .map(|c| u16::from_le_bytes([c[0], c[1]])),
+            )
+            .map(|r| r.unwrap_or('\u{FFFD}'))
+            .collect();
 
             let is_dir = (file_attrs & FILE_ATTRIBUTE_DIRECTORY.0) != 0;
 
@@ -405,10 +413,13 @@ pub fn scan_mft(
 // ── Internal types ──────────────────────────────────────────────────
 
 /// A raw MFT entry before it's inserted into the FileTree.
+///
+/// `file_name` uses [`CompactString`] so that short filenames (the common
+/// case, ≤15 bytes) are stored inline without a heap allocation.
 struct MftEntry {
     file_ref: u64,
     parent_ref: u64,
-    file_name: String,
+    file_name: CompactString,
     is_dir: bool,
 }
 
@@ -478,9 +489,10 @@ fn build_tree_from_mft(
         }
 
         let node = if entry.is_dir {
-            FileNode::new_dir(CompactString::new(&entry.file_name), None)
+            // Clone is cheap: CompactString clones inline for short names.
+            FileNode::new_dir(entry.file_name.clone(), None)
         } else {
-            FileNode::new_file(CompactString::new(&entry.file_name), 0, None)
+            FileNode::new_file(entry.file_name.clone(), 0, None)
         };
 
         let idx = tree.add_node(node);

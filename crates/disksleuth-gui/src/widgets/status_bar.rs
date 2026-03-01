@@ -108,7 +108,9 @@ pub fn status_bar(ui: &mut Ui, state: &AppState) {
                     ui.label(
                         egui::RichText::new(format!(
                             "{} files",
-                            format_count(tree.nodes.iter().filter(|n| !n.is_dir).count() as u64)
+                            // file_count is cached in FileTree::aggregate_sizes so
+                            // this is O(1) rather than O(N) across 2M nodes per frame.
+                            format_count(tree.file_count)
                         ))
                         .size(12.0)
                         .color(color_normal),

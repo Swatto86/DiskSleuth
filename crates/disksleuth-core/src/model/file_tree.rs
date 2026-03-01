@@ -20,6 +20,12 @@ pub struct FileTree {
 
     /// Indices of the N largest individual files, sorted descending by size.
     pub largest_files: Vec<NodeIndex>,
+
+    /// Cached count of non-directory nodes (regular files + error file nodes).
+    ///
+    /// Set once per aggregation pass so the render thread can display file
+    /// counts without iterating millions of nodes every frame.
+    pub file_count: u64,
 }
 
 impl FileTree {
@@ -34,6 +40,7 @@ impl FileTree {
             roots: Vec::new(),
             total_size: 0,
             largest_files: Vec::new(),
+            file_count: 0,
         }
     }
 
@@ -92,15 +99,20 @@ impl FileTree {
     /// Internal implementation shared by [`aggregate_sizes`] and
     /// [`aggregate_sizes_live`].
     fn aggregate_sizes_inner(&mut self, compute_largest: bool) {
-        // Reset directory aggregation fields so repeated calls don't
-        // accumulate on top of previous values.
+        // Reset directory aggregation fields and simultaneously count files.
+        // Counting here piggy-backs on the O(n) reset loop so we avoid a
+        // dedicated second pass that would be O(n) per render frame.
+        let mut file_count = 0u64;
         for node in self.nodes.iter_mut() {
             if node.is_dir {
                 node.size = 0;
                 node.allocated_size = 0;
                 node.descendant_count = 0;
+            } else {
+                file_count += 1;
             }
         }
+        self.file_count = file_count;
 
         // Reverse pass: children before parents.
         for i in (0..self.nodes.len()).rev() {

@@ -13,9 +13,11 @@
 /// **Labels**: Shown when the rectangle is large enough.
 /// **Hover**: Tooltip with name, size, percentage, type.
 use crate::state::AppState;
+use compact_str::CompactString;
 use disksleuth_core::model::size::format_size;
 use disksleuth_core::model::{FileTree, NodeIndex};
 use egui::{Color32, Rect, Sense, Ui, Vec2};
+use std::borrow::Cow;
 
 /// Maximum recursion depth for nested layout.
 const MAX_NEST_DEPTH: usize = 6;
@@ -60,7 +62,9 @@ struct TreemapRect {
     node_idx: NodeIndex,
     rect: Rect,
     color: Color32,
-    name: String,
+    /// [`CompactString`]: short names (≤15 bytes) are stored inline with no heap
+    /// allocation, which matters at up to 75 000 rects per frame.
+    name: CompactString,
     size: u64,
     percent: f32,
     is_dir: bool,
@@ -319,7 +323,7 @@ pub fn treemap(ui: &mut Ui, state: &AppState) -> Option<TreemapAction> {
                     painter.text(
                         hdr.left_top() + Vec2::new(3.0, 1.0),
                         egui::Align2::LEFT_TOP,
-                        &display,
+                        display.as_ref(),
                         egui::FontId::proportional(10.0),
                         label_color,
                     );
@@ -377,7 +381,7 @@ pub fn treemap(ui: &mut Ui, state: &AppState) -> Option<TreemapAction> {
                 painter.text(
                     tr.rect.left_top() + Vec2::new(3.0, 2.0),
                     egui::Align2::LEFT_TOP,
-                    &display,
+                    display.as_ref(),
                     egui::FontId::proportional(10.0),
                     label_color,
                 );
@@ -460,7 +464,7 @@ pub fn treemap(ui: &mut Ui, state: &AppState) -> Option<TreemapAction> {
             |ui| {
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                 ui.label(
-                    egui::RichText::new(&tr.name)
+                    egui::RichText::new(tr.name.as_str())
                         .strong()
                         .size(12.0)
                         .color(label_color),
@@ -524,7 +528,7 @@ pub fn treemap(ui: &mut Ui, state: &AppState) -> Option<TreemapAction> {
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
-fn truncate_name(name: &str, max_chars: usize) -> String {
+fn truncate_name(name: &str, max_chars: usize) -> Cow<'_, str> {
     // Use char count, not byte length: slicing by bytes panics on multi-byte
     // UTF-8 filenames (Cyrillic, CJK, emoji, accented latin, etc.).
     let char_count = name.chars().count();
@@ -535,9 +539,12 @@ fn truncate_name(name: &str, max_chars: usize) -> String {
             .nth(max_chars - 1)
             .map(|(i, _)| i)
             .unwrap_or(name.len());
-        format!("{}\u{2026}", &name[..end])
+        // Heap allocation only when truncation is actually needed; the majority
+        // of names already fit so this saves ~75 000 allocs/frame at full zoom.
+        Cow::Owned(format!("{}\u{2026}", &name[..end]))
     } else {
-        name.to_owned()
+        // Borrow the original slice -- zero allocation.
+        Cow::Borrowed(name)
     }
 }
 
@@ -616,6 +623,13 @@ fn squarify_nested(
     let mut remaining = bounds;
     let mut idx = 0;
 
+    // Allocate scratch buffers once per squarify_nested call and reuse them
+    // across every greedy-row iteration instead of allocating per row.
+    // On a fully-expanded treemap this eliminates O(rects) heap allocations
+    // per frame for both the row-index list and the trial-ratio buffer.
+    let mut row: Vec<usize> = Vec::with_capacity(32);
+    let mut trial: Vec<f32> = Vec::with_capacity(32);
+
     while idx < items.len() {
         let w = remaining.width();
         let h = remaining.height();
@@ -627,7 +641,8 @@ fn squarify_nested(
         let side = if layout_vertical { h } else { w };
 
         // Greedy row building.
-        let mut row: Vec<usize> = vec![idx];
+        row.clear();
+        row.push(idx);
         let mut row_area: f32 = items[idx].1;
         let mut best_worst = worst_ratio(&[items[idx].1], side, row_area);
 
@@ -635,7 +650,8 @@ fn squarify_nested(
         while idx < items.len() {
             let candidate = items[idx].1;
             let new_area = row_area + candidate;
-            let mut trial: Vec<f32> = row.iter().map(|&i| items[i].1).collect();
+            trial.clear();
+            trial.extend(row.iter().map(|&i| items[i].1));
             trial.push(candidate);
             let new_ratio = worst_ratio(&trial, side, new_area);
 
@@ -748,7 +764,7 @@ fn squarify_nested(
                     node_idx,
                     rect: item_rect,
                     color,
-                    name: child.name.to_string(),
+                    name: child.name.clone(),
                     size: child.size,
                     percent: pct as f32,
                     is_dir: true,
@@ -788,7 +804,7 @@ fn squarify_nested(
                     node_idx,
                     rect: item_rect,
                     color,
-                    name: child.name.to_string(),
+                    name: child.name.clone(),
                     size: child.size,
                     percent: pct as f32,
                     is_dir: false,
