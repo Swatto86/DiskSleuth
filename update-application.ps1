@@ -360,8 +360,13 @@ try {
 
     Write-Info "Step 5 -- Committing version bump..."
     Invoke-Git (@("add", "--") + $changedFiles)
-    Invoke-Git @("commit", "-m", "chore: bump version to $Version")
-    Write-Success "  Committed: chore: bump version to $Version"
+    $stagedChanges = & git diff --cached --quiet ; $hasStagedChanges = $LASTEXITCODE -ne 0
+    if ($hasStagedChanges) {
+        Invoke-Git @("commit", "-m", "chore: bump version to $Version")
+        Write-Success "  Committed: chore: bump version to $Version"
+    } else {
+        Write-Info "  Nothing to commit (version already at $Version) -- skipping commit"
+    }
 
     # ── 12. Step 6: Tag and push ──────────────────────────────────────────────
 
