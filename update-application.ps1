@@ -360,7 +360,8 @@ try {
 
     Write-Info "Step 5 -- Committing version bump..."
     Invoke-Git (@("add", "--") + $changedFiles)
-    $stagedChanges = & git diff --cached --quiet ; $hasStagedChanges = $LASTEXITCODE -ne 0
+    & git diff --cached --quiet
+    $hasStagedChanges = $LASTEXITCODE -ne 0
     if ($hasStagedChanges) {
         Invoke-Git @("commit", "-m", "chore: bump version to $Version")
         Write-Success "  Committed: chore: bump version to $Version"
