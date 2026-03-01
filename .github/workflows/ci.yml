@@ -1,4 +1,4 @@
-# Continuous Integration — runs on every push and pull request.
+# Continuous Integration - runs on every push and pull request.
 #
 # Gate order matches the update-application.ps1 release script:
 #   1. Format check   (cargo fmt -- --check)
@@ -19,6 +19,7 @@ on:
       - "LICENSE"
   pull_request:
     branches: ["main", "master"]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -45,21 +46,21 @@ jobs:
       - name: Cache Cargo registry and build artefacts
         uses: swatinem/rust-cache@v2
 
-      # ── Gate 1: Format ──────────────────────────────────────────────────
+      # -- Gate 1: Format --------------------------------------------------
       - name: Check formatting (cargo fmt)
         run: cargo fmt --all -- --check
 
-      # ── Gate 2: Lint ────────────────────────────────────────────────────
+      # -- Gate 2: Lint ----------------------------------------------------
       - name: Lint (cargo clippy)
         # -D warnings promotes every Clippy warning to an error so the build
         # fails rather than silently accumulating lint debt.
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # ── Gate 3: Tests ───────────────────────────────────────────────────
+      # -- Gate 3: Tests ---------------------------------------------------
       - name: Run tests (cargo test)
         run: cargo test --workspace
 
-      # ── Bonus: Debug build ──────────────────────────────────────────────
+      # -- Bonus: Debug build ----------------------------------------------
       # A debug build validates that the codebase compiles correctly even
       # outside of --release optimisations, catching any conditional-compile
       # discrepancies between debug and release profiles.
