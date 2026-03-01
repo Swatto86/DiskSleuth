@@ -306,7 +306,7 @@ try {
     $Notes -split "`n" | ForEach-Object { Write-Host "    $_" }
     Write-Host ""
     Write-Info "Diff of changed files:"
-    & git diff -- $changedFiles
+    & git --no-pager diff -- $changedFiles
     Write-Host ""
 
     $answer = Read-Host "Proceed? (y/N)"
