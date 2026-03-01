@@ -111,7 +111,9 @@ pub fn monitor_panel(ui: &mut Ui, state: &mut AppState) {
 
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
-                .stick_to_bottom(true)
+                // Note: stick_to_bottom is intentionally absent — entries are
+                // sorted by hit count (most active first), so the top of the
+                // list is always the most relevant view.
                 .show(ui, |ui| {
                     // Table header.
                     let accent = ui.visuals().hyperlink_color;

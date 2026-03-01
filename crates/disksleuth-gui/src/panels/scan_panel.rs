@@ -1,5 +1,5 @@
 /// Scan panel — drive selection and scan controls in the left sidebar.
-use crate::state::{AppPhase, AppState};
+use crate::state::AppState;
 use crate::widgets;
 
 use egui::Ui;
@@ -8,18 +8,8 @@ use egui::Ui;
 pub fn scan_panel(ui: &mut Ui, state: &mut AppState) {
     widgets::drive_picker::drive_picker(ui, state);
 
-    // Scanning progress indicator.
-    if state.phase == AppPhase::Scanning {
-        ui.add_space(8.0);
-        ui.spinner();
-        ui.label(
-            egui::RichText::new(format!(
-                "{} files found",
-                disksleuth_core::model::size::format_count(state.scan_files_found)
-            ))
-            .color(ui.visuals().weak_text_color()),
-        );
-    }
+    // Note: scanning progress (spinner + file count) is shown in the tree
+    // view and the status bar — no need to duplicate it here.
 
     ui.add_space(16.0);
     ui.separator();
@@ -30,11 +20,12 @@ pub fn scan_panel(ui: &mut Ui, state: &mut AppState) {
         ui.heading("Analysis");
         ui.add_space(4.0);
 
+        // "Top Largest Files" is live — selects the first result node.
         if ui
-            .selectable_label(false, "📊 Top 10 Largest Files")
+            .selectable_label(false, "\u{1f4ca} Top 10 Largest Files")
+            .on_hover_text("Select the largest file found in the scan")
             .clicked()
         {
-            // Scroll to / highlight top files — for now, select the first largest file.
             if let Some(ref tree) = state.tree {
                 if let Some(&idx) = tree.largest_files.first() {
                     state.selected_node = Some(idx);
@@ -42,19 +33,28 @@ pub fn scan_panel(ui: &mut Ui, state: &mut AppState) {
             }
         }
 
-        if ui
-            .selectable_label(false, "📁 File Type Breakdown")
-            .clicked()
-        {
-            // Phase 2: open file type analysis panel.
-        }
+        ui.add_space(2.0);
 
-        if ui.selectable_label(false, "📅 Old Files").clicked() {
-            // Phase 2: open age analysis panel.
-        }
+        // Stub shortcuts — disabled until implemented; tooltip explains why.
+        let coming_soon = "Coming in a future release";
+        ui.add_enabled(
+            false,
+            egui::SelectableLabel::new(false, "\u{1f4c1} File Type Breakdown"),
+        )
+        .on_disabled_hover_text(coming_soon);
 
-        if ui.selectable_label(false, "🔁 Duplicates").clicked() {
-            // Phase 2: open duplicate detection panel.
-        }
+        ui.add_space(2.0);
+        ui.add_enabled(
+            false,
+            egui::SelectableLabel::new(false, "\u{1f4c5} Old Files"),
+        )
+        .on_disabled_hover_text(coming_soon);
+
+        ui.add_space(2.0);
+        ui.add_enabled(
+            false,
+            egui::SelectableLabel::new(false, "\u{1f501} Duplicates"),
+        )
+        .on_disabled_hover_text(coming_soon);
     }
 }

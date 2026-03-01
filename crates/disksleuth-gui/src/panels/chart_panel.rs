@@ -10,6 +10,12 @@ use egui::{Rect, Ui, Vec2};
 
 /// Draw the chart panel showing file type breakdown.
 pub fn chart_panel(ui: &mut Ui, state: &AppState) {
+    // Extract theme-adaptive colours once for correct rendering in both
+    // dark and light mode.
+    let color_normal = ui.visuals().text_color();
+    let color_muted = ui.visuals().weak_text_color();
+    let bar_track_bg = ui.visuals().extreme_bg_color;
+
     // Obtain tree reference — final tree, then live tree.
     let live_guard;
     let tree: &FileTree;
@@ -49,21 +55,21 @@ pub fn chart_panel(ui: &mut Ui, state: &AppState) {
             // Label.
             ui.label(
                 egui::RichText::new(cat.label())
-                    .color(egui::Color32::from_rgb(0xe4, 0xe4, 0xe8))
+                    .color(color_normal)
                     .size(12.0),
             );
 
             // Size.
             ui.label(
                 egui::RichText::new(format_size(stat.total_size))
-                    .color(egui::Color32::from_rgb(0xb8, 0xb8, 0xc4))
+                    .color(color_normal)
                     .size(12.0),
             );
 
             // Percentage.
             ui.label(
                 egui::RichText::new(format!("({:.1}%)", pct))
-                    .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86))
+                    .color(color_muted)
                     .size(11.0),
             );
         });
@@ -74,7 +80,7 @@ pub fn chart_panel(ui: &mut Ui, state: &AppState) {
         let (bar_rect, _) =
             ui.allocate_exact_size(Vec2::new(bar_width, bar_height), egui::Sense::hover());
         let painter = ui.painter_at(bar_rect);
-        painter.rect_filled(bar_rect, 2.0, egui::Color32::from_rgb(0x1e, 0x1e, 0x2e));
+        painter.rect_filled(bar_rect, 2.0, bar_track_bg);
 
         let fill_w = bar_width * (pct / 100.0).clamp(0.0, 1.0);
         if fill_w > 0.5 {

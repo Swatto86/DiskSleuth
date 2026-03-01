@@ -39,10 +39,16 @@ pub fn toolbar(ui: &mut Ui, state: &mut AppState) {
             state.cancel_scan();
         }
 
-        // Refresh drives.
+        // Refresh drives — disabled during a scan to prevent a jarring
+        // state reset while results are being accumulated.
+        let can_refresh = state.phase != AppPhase::Scanning;
         if ui
-            .button("🔄 Refresh")
-            .on_hover_text("Re-enumerate drives")
+            .add_enabled(can_refresh, egui::Button::new("🔄 Refresh"))
+            .on_hover_text(if can_refresh {
+                "Re-enumerate drives"
+            } else {
+                "Cannot refresh drives while a scan is running"
+            })
             .clicked()
         {
             state.drives = disksleuth_core::platform::enumerate_drives();
@@ -54,10 +60,14 @@ pub fn toolbar(ui: &mut Ui, state: &mut AppState) {
         let can_export = state.tree.is_some();
         if ui
             .add_enabled(can_export, egui::Button::new("📤 Export"))
-            .on_hover_text("Export to CSV (Phase 2)")
+            .on_hover_text(if can_export {
+                "Export results to CSV"
+            } else {
+                "Run a scan first to enable export"
+            })
             .clicked()
         {
-            // Phase 2: implement CSV/JSON export.
+            // TODO: implement CSV/JSON export.
         }
 
         // Right-aligned controls.

@@ -10,6 +10,37 @@ pub fn drive_picker(ui: &mut Ui, state: &mut AppState) {
     ui.heading("Drives");
     ui.add_space(4.0);
 
+    // Derive card colours from the active theme so the widget looks correct
+    // in both dark and light mode.
+    let is_dark = ui.visuals().dark_mode;
+    let card_bg = if is_dark {
+        egui::Color32::from_rgb(0x28, 0x3a, 0x5c)
+    } else {
+        egui::Color32::from_rgb(0xd0, 0xdc, 0xf0)
+    };
+    let card_bg_selected = if is_dark {
+        egui::Color32::from_rgb(0x36, 0x50, 0x78)
+    } else {
+        egui::Color32::from_rgb(0xa8, 0xc0, 0xe8)
+    };
+    let card_bg_hover = if is_dark {
+        egui::Color32::from_rgb(0x32, 0x48, 0x6e)
+    } else {
+        egui::Color32::from_rgb(0xbc, 0xd0, 0xec)
+    };
+    let border_color = if is_dark {
+        egui::Color32::from_rgb(0x3a, 0x50, 0x72)
+    } else {
+        egui::Color32::from_rgb(0x90, 0xa8, 0xcc)
+    };
+    let bar_track_bg = if is_dark {
+        egui::Color32::from_rgb(0x1e, 0x1e, 0x2e)
+    } else {
+        egui::Color32::from_rgb(0xb0, 0xbc, 0xd8)
+    };
+    // Text on cards: white on dark cards, near-black on light cards.
+    let card_text = ui.visuals().text_color();
+
     let mut new_selection = state.selected_drive_index;
 
     for (i, drive) in state.drives.iter().enumerate() {
@@ -24,19 +55,17 @@ pub fn drive_picker(ui: &mut Ui, state: &mut AppState) {
 
         let painter = ui.painter_at(rect);
 
-        // Background -- deep navy card matching the accent blue hue.
-        let card_bg = egui::Color32::from_rgb(0x28, 0x3a, 0x5c);
+        // Background — colour adapts to theme and selection state.
         let bg = if is_selected {
-            egui::Color32::from_rgb(0x36, 0x50, 0x78)
+            card_bg_selected
         } else if response.hovered() {
-            egui::Color32::from_rgb(0x32, 0x48, 0x6e)
+            card_bg_hover
         } else {
             card_bg
         };
         painter.rect_filled(rect, 4.0, bg);
 
         // Subtle border.
-        let border_color = egui::Color32::from_rgb(0x3a, 0x50, 0x72);
         painter.rect_stroke(
             rect,
             4.0,
@@ -50,9 +79,6 @@ pub fn drive_picker(ui: &mut Ui, state: &mut AppState) {
         } else {
             format!("{} ({})", drive.letter, drive.label)
         };
-
-        // Drive letter and label -- white text on dark card.
-        let card_text = egui::Color32::WHITE;
 
         painter.text(
             egui::pos2(rect.left() + 8.0, rect.top() + 12.0),
@@ -80,7 +106,7 @@ pub fn drive_picker(ui: &mut Ui, state: &mut AppState) {
             egui::pos2(rect.left() + 8.0, bar_y),
             Vec2::new(bar_width, bar_height),
         );
-        painter.rect_filled(bar_rect, 3.0, egui::Color32::from_rgb(0x1e, 0x1e, 0x2e));
+        painter.rect_filled(bar_rect, 3.0, bar_track_bg);
 
         let fill_width = bar_width * (drive.usage_percent / 100.0).clamp(0.0, 1.0);
         if fill_width > 0.5 {
@@ -89,8 +115,11 @@ pub fn drive_picker(ui: &mut Ui, state: &mut AppState) {
             painter.rect_filled(fill_rect, 3.0, bar_color);
         }
 
-        // Size text.
-        let size_text = format!("{} / {} free", drive.used_display, drive.free_display);
+        // Size summary — "X used · Y free" is unambiguous where "X / Y free" is not.
+        let size_text = format!(
+            "{} used \u{00b7} {} free",
+            drive.used_display, drive.free_display
+        );
         painter.text(
             egui::pos2(rect.left() + 8.0, bar_y + bar_height + 10.0),
             egui::Align2::LEFT_CENTER,

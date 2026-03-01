@@ -6,12 +6,19 @@ use egui::Ui;
 
 /// Draw the details panel for the currently selected node.
 pub fn details_panel(ui: &mut Ui, state: &AppState) {
+    // Extract theme-adaptive colours once so the panel looks correct in both
+    // dark and light mode.
+    let color_muted = ui.visuals().weak_text_color();
+    let color_normal = ui.visuals().text_color();
+    let color_accent = ui.visuals().hyperlink_color;
+    let color_warning = egui::Color32::from_rgb(0xfa, 0xb3, 0x87);
+
     let selected = match state.selected_node {
         Some(s) => s,
         None => {
             ui.label(
                 egui::RichText::new("Select an item to see details")
-                    .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86))
+                    .color(color_muted)
                     .italics(),
             );
             return;
@@ -56,7 +63,7 @@ pub fn details_panel(ui: &mut Ui, state: &AppState) {
         ui.label(
             egui::RichText::new("Access denied — contents could not be read")
                 .size(11.0)
-                .color(egui::Color32::from_rgb(0xfa, 0xb3, 0x87))
+                .color(color_warning)
                 .italics(),
         );
         ui.add_space(2.0);
@@ -67,7 +74,7 @@ pub fn details_panel(ui: &mut Ui, state: &AppState) {
         egui::RichText::new(node.name.as_str())
             .size(14.0)
             .strong()
-            .color(egui::Color32::from_rgb(0xe4, 0xe4, 0xe8)),
+            .color(color_normal),
     );
 
     ui.add_space(4.0);
@@ -76,7 +83,7 @@ pub fn details_panel(ui: &mut Ui, state: &AppState) {
     ui.label(
         egui::RichText::new(&full_path)
             .size(11.0)
-            .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
+            .color(color_muted),
     );
 
     ui.add_space(8.0);
@@ -88,43 +95,30 @@ pub fn details_panel(ui: &mut Ui, state: &AppState) {
         .num_columns(2)
         .spacing([8.0, 4.0])
         .show(ui, |ui| {
-            ui.label(egui::RichText::new("Size:").color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)));
+            ui.label(egui::RichText::new("Size:").color(color_muted));
             ui.label(
                 egui::RichText::new(format_size(node.size))
-                    .color(egui::Color32::from_rgb(0x89, 0xb4, 0xfa))
+                    .color(color_accent)
                     .strong(),
             );
             ui.end_row();
 
             if node.size != node.allocated_size {
-                ui.label(
-                    egui::RichText::new("On disk:")
-                        .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
-                );
-                ui.label(
-                    egui::RichText::new(format_size(node.allocated_size))
-                        .color(egui::Color32::from_rgb(0xb8, 0xb8, 0xc4)),
-                );
+                ui.label(egui::RichText::new("On disk:").color(color_muted));
+                ui.label(egui::RichText::new(format_size(node.allocated_size)).color(color_normal));
                 ui.end_row();
             }
 
+            ui.label(egui::RichText::new("% of parent:").color(color_muted));
             ui.label(
-                egui::RichText::new("% of parent:")
-                    .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
-            );
-            ui.label(
-                egui::RichText::new(format!("{:.1}%", node.percent_of_parent))
-                    .color(egui::Color32::from_rgb(0xb8, 0xb8, 0xc4)),
+                egui::RichText::new(format!("{:.1}%", node.percent_of_parent)).color(color_normal),
             );
             ui.end_row();
 
             if node.is_dir {
+                ui.label(egui::RichText::new("Files:").color(color_muted));
                 ui.label(
-                    egui::RichText::new("Files:").color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
-                );
-                ui.label(
-                    egui::RichText::new(format_count(node.descendant_count))
-                        .color(egui::Color32::from_rgb(0xb8, 0xb8, 0xc4)),
+                    egui::RichText::new(format_count(node.descendant_count)).color(color_normal),
                 );
                 ui.end_row();
             }
@@ -141,14 +135,8 @@ pub fn details_panel(ui: &mut Ui, state: &AppState) {
                     } else {
                         format!("{:.1} years ago", days as f64 / 365.0)
                     };
-                    ui.label(
-                        egui::RichText::new("Modified:")
-                            .color(egui::Color32::from_rgb(0x6c, 0x70, 0x86)),
-                    );
-                    ui.label(
-                        egui::RichText::new(date_str)
-                            .color(egui::Color32::from_rgb(0xb8, 0xb8, 0xc4)),
-                    );
+                    ui.label(egui::RichText::new("Modified:").color(color_muted));
+                    ui.label(egui::RichText::new(date_str).color(color_normal));
                     ui.end_row();
                 }
             }
