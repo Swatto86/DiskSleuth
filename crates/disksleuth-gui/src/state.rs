@@ -1,3 +1,4 @@
+use disksleuth_core::analysis::{analyse_file_types, CategoryStats};
 /// Application state management.
 ///
 /// Centralises all mutable state that the UI reads and writes.
@@ -11,9 +12,9 @@ use disksleuth_core::monitor::{MonitorHandle, WriteEvent};
 use disksleuth_core::platform::DriveInfo;
 use disksleuth_core::scanner::progress::ScanProgress;
 use disksleuth_core::scanner::{LiveTree, ScanHandle};
-use std::time::Duration;
+use std::collections::VecDeque;
 
-/// The current phase of the application.
+use std::time::Duration;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppPhase {
     /// Idle — no scan in progress, possibly showing previous results.
@@ -106,10 +107,10 @@ pub struct AppState {
     // ── Treemap navigation ─────────────────────────────
     /// The directory currently shown as root of the treemap.
     pub treemap_root: Option<NodeIndex>,
-    /// Back stack for treemap navigation.
-    pub treemap_back: Vec<NodeIndex>,
-    /// Forward stack for treemap navigation.
-    pub treemap_forward: Vec<NodeIndex>,
+    /// Back stack for treemap navigation (VecDeque for O(1) front eviction).
+    pub treemap_back: VecDeque<NodeIndex>,
+    /// Forward stack for treemap navigation (VecDeque for O(1) front eviction).
+    pub treemap_forward: VecDeque<NodeIndex>,
 
     // ── UI state ───────────────────────────────────────
     pub tree_scroll_offset: f32,
@@ -121,7 +122,12 @@ pub struct AppState {
     /// `true` = dark mode (default), `false` = light mode.
     pub dark_mode: bool,
 
-    // ── Live write monitor ─────────────────────────────────
+    // ── Pre-computed analysis cache ──────────────────────────
+    /// File-type breakdown — computed once after scan completes,
+    /// not on every render frame.
+    pub file_type_stats: Option<Vec<CategoryStats>>,
+
+    // ── Live write monitor ───────────────────────────────
     /// Whether the monitor bottom panel is visible.
     pub show_monitor_panel: bool,
     /// Whether the monitor is actively watching.
@@ -166,14 +172,15 @@ impl AppState {
             selected_node: None,
             live_tree_last_len: 0,
             treemap_root: None,
-            treemap_back: Vec::new(),
-            treemap_forward: Vec::new(),
+            treemap_back: VecDeque::new(),
+            treemap_forward: VecDeque::new(),
             tree_scroll_offset: 0.0,
             show_errors: false,
             show_about: false,
             scan_errors: Vec::new(),
             context_menu_node: None,
             dark_mode: true,
+            file_type_stats: None,
             show_monitor_panel: false,
             monitor_active: false,
             monitor_path: String::new(),
@@ -197,6 +204,7 @@ impl AppState {
         self.scan_is_elevated = false;
         self.scan_errors.clear();
         self.tree = None;
+        self.file_type_stats = None;
         self.visible_rows.clear();
         self.selected_node = None;
         self.live_tree_last_len = 0;
@@ -366,6 +374,9 @@ impl AppState {
                                 .unwrap_or_else(|arc| parking_lot::RwLock::new(arc.read().clone())),
                         );
                         self.build_initial_visible_rows(&tree);
+                        // Pre-compute analysis cache so chart panel never runs
+                        // analyse_file_types on the render thread.
+                        self.file_type_stats = Some(analyse_file_types(&tree));
                         self.tree = Some(tree);
                     }
 
@@ -383,6 +394,7 @@ impl AppState {
                                 .unwrap_or_else(|arc| parking_lot::RwLock::new(arc.read().clone())),
                         );
                         self.build_initial_visible_rows(&tree);
+                        self.file_type_stats = Some(analyse_file_types(&tree));
                         self.tree = Some(tree);
                     }
 
@@ -516,64 +528,42 @@ impl AppState {
 
     /// Ensure a node is visible in the tree view by expanding all its ancestors.
     /// This is called when the treemap selection changes to sync the tree view.
+    ///
+    /// Uses disjoint field borrows (no `FileTree` clone) by delegating work
+    /// to a free function that receives `&mut visible_rows` and `&FileTree`
+    /// separately — the same pattern used by `toggle_expand`.
     pub fn reveal_node_in_tree(&mut self, target: NodeIndex) {
-        let tree = if let Some(ref t) = self.tree {
-            t.clone()
-        } else if let Some(ref lt) = self.live_tree {
-            lt.read().clone()
-        } else {
-            return;
-        };
-
         // Already visible? Just scroll to it.
-        if self.visible_rows.iter().any(|r| r.node_index == target) {
-            // Find the row index and set scroll offset so it's visible.
-            if let Some(pos) = self
-                .visible_rows
-                .iter()
-                .position(|r| r.node_index == target)
-            {
-                // Set scroll offset to show this row (ROW_HEIGHT = 24.0).
-                let row_y = pos as f32 * 24.0;
-                // Only scroll if the row is likely off-screen.
-                if (row_y - self.tree_scroll_offset).abs() > 600.0 {
-                    self.tree_scroll_offset = (row_y - 120.0).max(0.0);
-                }
-            }
-            return;
-        }
-
-        // Build ancestor chain from target up to root.
-        let mut ancestors: Vec<NodeIndex> = Vec::new();
-        let mut cursor = target;
-        while let Some(p) = tree.nodes[cursor.idx()].parent {
-            ancestors.push(p);
-            cursor = p;
-        }
-        ancestors.reverse(); // root → ... → parent
-
-        // Expand each ancestor in order.
-        for ancestor in &ancestors {
-            // Find the ancestor in visible_rows.
-            if let Some(row_idx) = self
-                .visible_rows
-                .iter()
-                .position(|r| r.node_index == *ancestor)
-            {
-                if !self.visible_rows[row_idx].is_expanded {
-                    toggle_expand_inner(&mut self.visible_rows, row_idx, &tree);
-                }
-            }
-        }
-
-        // Scroll to the target row.
         if let Some(pos) = self
             .visible_rows
             .iter()
             .position(|r| r.node_index == target)
         {
             let row_y = pos as f32 * 24.0;
-            self.tree_scroll_offset = (row_y - 120.0).max(0.0);
+            if (row_y - self.tree_scroll_offset).abs() > 600.0 {
+                self.tree_scroll_offset = (row_y - 120.0).max(0.0);
+            }
+            return;
+        }
+
+        // Disjoint borrow: self.tree / self.live_tree (immutable) and
+        // self.visible_rows + self.tree_scroll_offset (mutable).  This avoids
+        // cloning a potentially million-node FileTree.
+        if let Some(ref tree) = self.tree {
+            reveal_node_inner(
+                &mut self.visible_rows,
+                &mut self.tree_scroll_offset,
+                target,
+                tree,
+            );
+        } else if let Some(ref lt) = self.live_tree {
+            let guard = lt.read();
+            reveal_node_inner(
+                &mut self.visible_rows,
+                &mut self.tree_scroll_offset,
+                target,
+                &guard,
+            );
         }
     }
 }
@@ -625,6 +615,41 @@ fn toggle_expand_inner(visible_rows: &mut Vec<VisibleRow>, row_index: usize, tre
     }
 }
 
+/// Expand ancestors of `target` so it becomes visible, then scroll to it.
+///
+/// Free function to allow disjoint borrows (`&mut visible_rows` and
+/// `&mut scroll_offset` vs borrowing `AppState.tree` immutably).
+fn reveal_node_inner(
+    visible_rows: &mut Vec<VisibleRow>,
+    scroll_offset: &mut f32,
+    target: NodeIndex,
+    tree: &FileTree,
+) {
+    // Build ancestor chain from target up to root.
+    let mut ancestors: Vec<NodeIndex> = Vec::new();
+    let mut cursor = target;
+    while let Some(p) = tree.nodes[cursor.idx()].parent {
+        ancestors.push(p);
+        cursor = p;
+    }
+    ancestors.reverse(); // root → ... → direct parent
+
+    // Expand each ancestor in order so the target becomes reachable.
+    for ancestor in &ancestors {
+        if let Some(row_idx) = visible_rows.iter().position(|r| r.node_index == *ancestor) {
+            if !visible_rows[row_idx].is_expanded {
+                toggle_expand_inner(visible_rows, row_idx, tree);
+            }
+        }
+    }
+
+    // Scroll to the target row.
+    if let Some(pos) = visible_rows.iter().position(|r| r.node_index == target) {
+        let row_y = pos as f32 * 24.0;
+        *scroll_offset = (row_y - 120.0).max(0.0);
+    }
+}
+
 impl AppState {
     /// Navigate the treemap into a directory, pushing current root onto back stack.
     pub fn treemap_navigate_to(&mut self, node: NodeIndex) {
@@ -643,9 +668,9 @@ impl AppState {
             if cur != node {
                 // Evict oldest entry when the history stack is at capacity.
                 if self.treemap_back.len() >= MAX_NAV_HISTORY {
-                    self.treemap_back.remove(0);
+                    self.treemap_back.pop_front();
                 }
-                self.treemap_back.push(cur);
+                self.treemap_back.push_back(cur);
             }
         }
         self.treemap_forward.clear();
@@ -654,12 +679,12 @@ impl AppState {
 
     /// Go back in treemap navigation history.
     pub fn treemap_go_back(&mut self) {
-        if let Some(prev) = self.treemap_back.pop() {
+        if let Some(prev) = self.treemap_back.pop_back() {
             if let Some(cur) = self.treemap_root {
                 if self.treemap_forward.len() >= MAX_NAV_HISTORY {
-                    self.treemap_forward.remove(0);
+                    self.treemap_forward.pop_front();
                 }
-                self.treemap_forward.push(cur);
+                self.treemap_forward.push_back(cur);
             }
             self.treemap_root = Some(prev);
         }
@@ -667,29 +692,43 @@ impl AppState {
 
     /// Go forward in treemap navigation history.
     pub fn treemap_go_forward(&mut self) {
-        if let Some(next) = self.treemap_forward.pop() {
+        if let Some(next) = self.treemap_forward.pop_back() {
             if let Some(cur) = self.treemap_root {
                 if self.treemap_back.len() >= MAX_NAV_HISTORY {
-                    self.treemap_back.remove(0);
+                    self.treemap_back.pop_front();
                 }
-                self.treemap_back.push(cur);
+                self.treemap_back.push_back(cur);
             }
             self.treemap_root = Some(next);
         }
     }
 
     /// Navigate treemap up to parent directory.
-    pub fn treemap_go_up(&mut self, tree: &FileTree) {
-        if let Some(root) = self.treemap_root {
-            if let Some(parent) = tree.nodes[root.idx()].parent {
-                // Cap the back stack consistent with all other nav methods.
-                if self.treemap_back.len() >= MAX_NAV_HISTORY {
-                    self.treemap_back.remove(0);
+    ///
+    /// Reads the parent index from the stored tree directly, eliminating
+    /// the need for an external `&FileTree` parameter (and the clone that
+    /// was previously required at the call site in `app.rs`).
+    pub fn treemap_go_up(&mut self) {
+        let parent_opt = match self.treemap_root {
+            None => return,
+            Some(root) => {
+                if let Some(ref tree) = self.tree {
+                    tree.nodes[root.idx()].parent
+                } else if let Some(ref lt) = self.live_tree {
+                    lt.read().nodes[root.idx()].parent
+                } else {
+                    None
                 }
-                self.treemap_back.push(root);
-                self.treemap_forward.clear();
-                self.treemap_root = Some(parent);
             }
+        };
+        if let Some(parent) = parent_opt {
+            let cur = self.treemap_root.unwrap();
+            if self.treemap_back.len() >= MAX_NAV_HISTORY {
+                self.treemap_back.pop_front();
+            }
+            self.treemap_back.push_back(cur);
+            self.treemap_forward.clear();
+            self.treemap_root = Some(parent);
         }
     }
 }

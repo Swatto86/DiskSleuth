@@ -2,13 +2,16 @@
 ///
 /// Phase 2: will contain pie/donut chart of file type breakdown
 /// and optional treemap/sunburst visualisation.
-use crate::state::AppState;
-use disksleuth_core::analysis::{analyse_file_types, FileCategory};
+use crate::state::{AppPhase, AppState};
+use disksleuth_core::analysis::FileCategory;
 use disksleuth_core::model::size::format_size;
-use disksleuth_core::model::FileTree;
 use egui::{Rect, Ui, Vec2};
 
 /// Draw the chart panel showing file type breakdown.
+///
+/// Uses `AppState::file_type_stats` (pre-computed once after scan completion)
+/// rather than calling `analyse_file_types` on every render frame.  This
+/// avoids iterating over millions of nodes at 60 fps.
 pub fn chart_panel(ui: &mut Ui, state: &AppState) {
     // Extract theme-adaptive colours once for correct rendering in both
     // dark and light mode.
@@ -16,31 +19,31 @@ pub fn chart_panel(ui: &mut Ui, state: &AppState) {
     let color_muted = ui.visuals().weak_text_color();
     let bar_track_bg = ui.visuals().extreme_bg_color;
 
-    // Obtain tree reference — final tree, then live tree.
-    let live_guard;
-    let tree: &FileTree;
-
-    if let Some(ref t) = state.tree {
-        tree = t;
-    } else if let Some(ref lt) = state.live_tree {
-        live_guard = lt.read();
-        if live_guard.is_empty() {
-            return;
-        }
-        tree = &*live_guard;
-    } else {
-        return;
-    };
-
     ui.heading("File Types");
     ui.add_space(4.0);
 
-    let stats = analyse_file_types(tree);
+    // Use the pre-computed cache; during an active scan show a placeholder.
+    let stats = match state.file_type_stats.as_deref() {
+        Some(s) => s,
+        None => {
+            if state.phase == AppPhase::Scanning {
+                ui.label(
+                    egui::RichText::new("Available after scan completes.")
+                        .color(color_muted)
+                        .size(12.0),
+                );
+            }
+            return;
+        }
+    };
 
-    for stat in &stats {
+    // Total size is only meaningful from the completed tree.
+    let total_size = state.tree.as_ref().map_or(0u64, |t| t.total_size);
+
+    for stat in stats {
         let cat = stat.category.unwrap_or(FileCategory::Other);
-        let pct = if tree.total_size > 0 {
-            (stat.total_size as f64 / tree.total_size as f64 * 100.0) as f32
+        let pct = if total_size > 0 {
+            (stat.total_size as f64 / total_size as f64 * 100.0) as f32
         } else {
             0.0
         };

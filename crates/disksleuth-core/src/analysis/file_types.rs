@@ -45,8 +45,28 @@ pub struct CategoryStats {
 }
 
 /// Categorise a file extension into a broad category.
+///
+/// Zero-heap-allocation hot path: extensions are lowercased into a fixed-size
+/// stack buffer (`[u8; 16]`) rather than allocating a `String`.  File
+/// extensions longer than 16 bytes are treated as `Other`.
 pub fn categorise_extension(ext: &str) -> FileCategory {
-    match ext.to_ascii_lowercase().as_str() {
+    // Fast rejection: any extension longer than 16 bytes is definitely `Other`.
+    let bytes = ext.as_bytes();
+    if bytes.len() > 16 {
+        return FileCategory::Other;
+    }
+
+    // Lowercase into a stack buffer — zero heap allocation.
+    let mut lower = [0u8; 16];
+    for (dest, &src) in lower.iter_mut().zip(bytes.iter()) {
+        *dest = src.to_ascii_lowercase();
+    }
+    let lower_str = match std::str::from_utf8(&lower[..bytes.len()]) {
+        Ok(s) => s,
+        Err(_) => return FileCategory::Other,
+    };
+
+    match lower_str {
         // Documents
         "doc" | "docx" | "pdf" | "txt" | "rtf" | "odt" | "xls" | "xlsx" | "ppt" | "pptx"
         | "csv" | "md" | "epub" => FileCategory::Documents,
@@ -79,7 +99,8 @@ pub fn categorise_extension(ext: &str) -> FileCategory {
 
 /// Compute per-category size and count stats for the entire tree.
 pub fn analyse_file_types(tree: &FileTree) -> Vec<CategoryStats> {
-    let mut map: HashMap<FileCategory, CategoryStats> = HashMap::new();
+    // There are exactly 9 categories — pre-size to avoid rehashing.
+    let mut map: HashMap<FileCategory, CategoryStats> = HashMap::with_capacity(9);
 
     for node in &tree.nodes {
         if node.is_dir {

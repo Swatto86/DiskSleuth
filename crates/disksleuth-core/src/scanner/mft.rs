@@ -379,13 +379,8 @@ pub fn scan_mft(
 
     // Step 3: Build the FileTree from MFT records.
     let root_display = format!("{}:", drive_letter.to_uppercase());
-    let (tree, error_count) = build_tree_from_mft(
-        &records,
-        &root_display,
-        &root_path,
-        &progress_tx,
-        &cancel_flag,
-    );
+    let (tree, error_count) =
+        build_tree_from_mft(&records, &root_display, &root_path, &progress_tx);
 
     if cancel_flag.load(Ordering::Relaxed) {
         let _ = progress_tx.send(ScanProgress::Cancelled);
@@ -450,14 +445,13 @@ fn get_ntfs_volume_data(handle: HANDLE) -> Option<NTFS_VOLUME_DATA_BUFFER> {
 /// 1. Create all nodes upfront (one per MFT record).
 /// 2. Map `file_ref → NodeIndex` in a HashMap.
 /// 3. Wire parent→child relationships using `parent_ref` lookups.
-/// 4. Stat files for sizes (USN records don't include file size).
+/// 4. Stat files for sizes in parallel with rayon (USN records omit file size).
 /// 5. Run `aggregate_sizes()`.
 fn build_tree_from_mft(
     records: &[MftEntry],
     root_display: &str,
     root_path: &Path,
     progress_tx: &Sender<ScanProgress>,
-    cancel_flag: &Arc<AtomicBool>,
 ) -> (FileTree, u64) {
     let mut tree = FileTree::with_capacity(records.len() + 1);
     let mut error_count: u64 = 0;
@@ -516,60 +510,62 @@ fn build_tree_from_mft(
     // Phase C: Stat files for sizes. USN records don't include file size,
     // so we read metadata from the filesystem. This is still faster than
     // a full directory walk because we skip enumeration entirely.
+    //
+    // Parallelised with rayon: `full_path` is read-only, `fs::metadata` is
+    // a syscall that benefits from concurrent execution on SSDs/NVMe.
+    // Results are written back in a single sequential pass.
     let total_files = tree.nodes.iter().filter(|n| !n.is_dir).count();
-    let mut files_processed: u64 = 0;
+    let _ = progress_tx.send(ScanProgress::Update {
+        files_found: total_files as u64,
+        dirs_found: 0,
+        total_size: 0,
+        current_path: format!("Reading file sizes... 0/{total_files}"),
+    });
 
-    for i in 0..tree.nodes.len() {
-        if cancel_flag.load(Ordering::Relaxed) {
-            return (tree, error_count);
-        }
+    // Collect file indices (read-only pass, no allocation per node).
+    let file_indices: Vec<usize> = (0..tree.nodes.len())
+        .filter(|&i| !tree.nodes[i].is_dir)
+        .collect();
 
-        if tree.nodes[i].is_dir {
-            continue;
-        }
-
-        let rel_path = tree.full_path(NodeIndex::new(i));
-        let full_path = if let Some(remainder) = rel_path.strip_prefix(root_display) {
-            let remainder = remainder.trim_start_matches('\\');
-            if remainder.is_empty() {
-                format!("{}\\", root_display)
+    // Parallel stat: (index, size, allocated_size, modified, is_error)
+    // `tree` is borrowed immutably here; `full_path` only reads nodes.
+    use rayon::prelude::*;
+    let stats: Vec<(usize, u64, Option<std::time::SystemTime>, bool)> = file_indices
+        .par_iter()
+        .map(|&i| {
+            let rel_path = tree.full_path(NodeIndex::new(i));
+            let full_path = if let Some(remainder) = rel_path.strip_prefix(root_display) {
+                let remainder = remainder.trim_start_matches('\\');
+                if remainder.is_empty() {
+                    format!("{}\\", root_display)
+                } else {
+                    format!("{}\\{}", root_display, remainder)
+                }
             } else {
-                format!("{}\\{}", root_display, remainder)
+                format!(
+                    "{}\\{}",
+                    root_path.to_string_lossy().trim_end_matches('\\'),
+                    &rel_path
+                )
+            };
+            match std::fs::metadata(&full_path) {
+                Ok(meta) => (i, meta.len(), meta.modified().ok(), false),
+                Err(_) => (i, 0u64, None, true),
             }
-        } else {
-            format!(
-                "{}\\{}",
-                root_path.to_string_lossy().trim_end_matches('\\'),
-                &rel_path
-            )
-        };
+        })
+        .collect();
 
-        match std::fs::metadata(&full_path) {
-            Ok(meta) => {
-                tree.nodes[i].size = meta.len();
-                tree.nodes[i].allocated_size = meta.len();
-                tree.nodes[i].modified = meta.modified().ok();
-            }
-            Err(_) => {
-                error_count += 1;
-            }
-        }
-
-        files_processed += 1;
-        if files_processed.is_multiple_of(25000) {
-            let _ = progress_tx.send(ScanProgress::Update {
-                files_found: files_processed,
-                dirs_found: 0,
-                total_size: 0,
-                current_path: format!(
-                    "Reading file sizes... {}/{} ({:.0}%)",
-                    files_processed,
-                    total_files,
-                    files_processed as f64 / total_files.max(1) as f64 * 100.0,
-                ),
-            });
+    // Sequential write-back pass.
+    let mut phase_c_errors: u64 = 0;
+    for (i, size, modified, is_error) in stats {
+        tree.nodes[i].size = size;
+        tree.nodes[i].allocated_size = size;
+        tree.nodes[i].modified = modified;
+        if is_error {
+            phase_c_errors += 1;
         }
     }
+    error_count += phase_c_errors;
 
     // Phase D: Aggregate sizes bottom-up.
     tree.aggregate_sizes();

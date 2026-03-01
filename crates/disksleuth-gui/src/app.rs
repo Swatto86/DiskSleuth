@@ -42,6 +42,11 @@ impl DiskSleuthState {
 /// The DiskSleuth application.
 pub struct DiskSleuthApp {
     state: AppState,
+    /// Tracks the `dark_mode` value at the last `ctx.set_visuals()` call.
+    /// `None` on first frame (→ always sets visuals once at startup).
+    /// Avoids allocating a new `Visuals` struct every frame when the theme
+    /// has not changed.
+    last_dark_mode: Option<bool>,
 }
 
 impl DiskSleuthApp {
@@ -90,7 +95,10 @@ impl DiskSleuthApp {
         // Apply initial dark visuals.
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
 
-        Self { state: state.inner }
+        Self {
+            state: state.inner,
+            last_dark_mode: None,
+        }
     }
 }
 
@@ -109,12 +117,16 @@ impl eframe::App for DiskSleuthApp {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // ── Apply theme ───────────────────────────────────────────────────
-        // Called every frame so that toggling dark_mode takes effect
-        // immediately on the next rendered frame.
-        if self.state.dark_mode {
-            ctx.set_visuals(egui::Visuals::dark());
-        } else {
-            ctx.set_visuals(egui::Visuals::light());
+        // Only call set_visuals when dark_mode actually changes so we avoid
+        // allocating a new Visuals struct (and diffing it) every frame.
+        let dark = self.state.dark_mode;
+        if self.last_dark_mode != Some(dark) {
+            if dark {
+                ctx.set_visuals(egui::Visuals::dark());
+            } else {
+                ctx.set_visuals(egui::Visuals::light());
+            }
+            self.last_dark_mode = Some(dark);
         }
 
         // ── Process background messages ───────────────────────────────────
@@ -296,13 +308,8 @@ impl eframe::App for DiskSleuthApp {
                         self.state.treemap_go_forward();
                     }
                     TreemapAction::Up => {
-                        if let Some(ref tree) = self.state.tree {
-                            let tree = tree.clone();
-                            self.state.treemap_go_up(&tree);
-                        } else if let Some(ref lt) = self.state.live_tree {
-                            let tree = lt.read().clone();
-                            self.state.treemap_go_up(&tree);
-                        }
+                        // treemap_go_up reads the tree internally — no clone needed.
+                        self.state.treemap_go_up();
                     }
                 }
             }

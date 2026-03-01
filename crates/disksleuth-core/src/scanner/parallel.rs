@@ -4,6 +4,20 @@
 /// It uses `jwalk`'s rayon-backed parallel traversal to walk the directory tree
 /// at high speed, writing nodes into a shared `LiveTree` so the UI can render
 /// the tree in real time.
+///
+/// # Lock-contention mitigation
+///
+/// The naive approach acquires one `RwLock::write()` per node — 2M nodes means
+/// 2M lock cycles.  Instead, nodes are accumulated in a local `Vec<PendingEntry>`
+/// and flushed to the shared tree under a **single write lock per batch**.  At
+/// `BATCH_SIZE = 2_000`, a 2M-node scan requires only ~1_000 write-lock
+/// acquisitions, a 2_000× reduction.
+///
+/// **NodeIndex pre-computation**: because `FileTree::add_node` merely appends to
+/// a `Vec`, the index for any pending entry is deterministic:
+/// `NodeIndex(arena_base + position_in_pending_vec)`.  Directory entries are
+/// registered in `dir_map` with their pre-computed index immediately, so child
+/// entries processed in the same batch find their parent without an extra lock.
 use crate::model::{FileNode, NodeIndex};
 use crate::scanner::progress::ScanProgress;
 use crate::scanner::LiveTree;
@@ -15,6 +29,44 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::debug;
+
+/// Number of nodes to accumulate locally before flushing to the shared LiveTree.
+///
+/// Larger values reduce lock pressure further but delay live-view updates.
+/// 2_000 is a good balance: ~1_000 flush events on a 2M-node drive vs the
+/// default 2M, while each flush holds the write lock for < 1 ms.
+const BATCH_SIZE: usize = 2_000;
+
+/// A node buffered in the local pending vec before being flushed under one lock.
+struct PendingEntry {
+    node: FileNode,
+    parent_idx: NodeIndex,
+    /// Pre-computed index this entry will receive on insertion.
+    /// Equals `arena_base + position_in_pending_vec` at push time.
+    pre_idx: NodeIndex,
+}
+
+/// Drain `pending` into the shared tree under a single write-lock acquisition.
+///
+/// Returns the number of entries flushed so the caller can advance `arena_base`.
+/// Verifies in debug builds that pre-computed indices are correct.
+#[inline]
+fn flush_pending(live_tree: &LiveTree, pending: &mut Vec<PendingEntry>) -> usize {
+    let count = pending.len();
+    if count == 0 {
+        return 0;
+    }
+    let mut tree = live_tree.write();
+    for pe in pending.drain(..) {
+        let idx = tree.add_node(pe.node);
+        debug_assert_eq!(
+            idx, pe.pre_idx,
+            "NodeIndex pre-computation mismatch — arena_base drift"
+        );
+        tree.add_child(pe.parent_idx, idx);
+    }
+    count
+}
 
 /// Scan a directory tree using parallel directory walking.
 ///
@@ -52,6 +104,14 @@ pub fn scan_parallel(
     let mut total_size: u64 = 0;
     let mut update_counter: u64 = 0;
 
+    // Local batch buffer.  Flushed every BATCH_SIZE entries (or on demand
+    // before ensure_ancestors / progress snapshots).
+    let mut pending: Vec<PendingEntry> = Vec::with_capacity(BATCH_SIZE + 64);
+
+    // Tracks how many nodes are in the arena at the start of the current batch.
+    // Root node (index 0) was just inserted, so we start at 1.
+    let mut arena_base: usize = 1;
+
     // Configure jwalk for maximum throughput.
     let walker = jwalk::WalkDir::new(&root_path)
         .skip_hidden(false)
@@ -61,7 +121,8 @@ pub fn scan_parallel(
     for entry_result in walker {
         // Check cancellation every 1000 entries.
         update_counter += 1;
-        if update_counter.is_multiple_of(1000) && cancel_flag.load(Ordering::Relaxed) {
+        if update_counter.is_multiple_of(1_000) && cancel_flag.load(Ordering::Relaxed) {
+            flush_pending(&live_tree, &mut pending);
             let _ = progress_tx.send(ScanProgress::Cancelled);
             return;
         }
@@ -69,9 +130,13 @@ pub fn scan_parallel(
         let entry = match entry_result {
             Ok(e) => e,
             Err(err) => {
+                // Flush pending batch first so the arena is in a clean state
+                // before the individual write lock for the error node.
+                let flushed = flush_pending(&live_tree, &mut pending);
+                arena_base += flushed;
+
                 error_count += 1;
                 // jwalk errors are typically access-denied on directories.
-                // Extract what path info we can from the error.
                 let err_path = err
                     .path()
                     .map(|p| p.to_string_lossy().to_string())
@@ -95,6 +160,7 @@ pub fn scan_parallel(
                             let mut tree = live_tree.write();
                             let idx = tree.add_node(error_node);
                             tree.add_child(pidx, idx);
+                            arena_base += 1;
                         }
                     }
                 }
@@ -108,7 +174,6 @@ pub fn scan_parallel(
         };
 
         let path = entry.path();
-        let file_name = entry.file_name().to_string_lossy().to_string();
 
         // Skip the root itself (already created).
         if path == root_path {
@@ -124,64 +189,95 @@ pub fn scan_parallel(
         let parent_idx = match dir_map.get(&parent_path) {
             Some(&idx) => idx,
             None => {
+                // Flush current batch first so the live tree is fully up to date
+                // before ensure_ancestors creates new ancestor nodes.
+                let flushed = flush_pending(&live_tree, &mut pending);
+                arena_base += flushed;
                 // Parent not in map — create ancestor chain lazily.
-                ensure_ancestors(&live_tree, &mut dir_map, &parent_path, &root_path, root_idx)
+                ensure_ancestors(
+                    &live_tree,
+                    &mut dir_map,
+                    &parent_path,
+                    &root_path,
+                    root_idx,
+                    &mut arena_base,
+                )
             }
         };
 
+        // Pre-compute the NodeIndex this entry will receive on flush.
+        let pre_idx = NodeIndex::new(arena_base + pending.len());
+        let file_name = entry.file_name().to_string_lossy();
+
         if entry.file_type().is_dir() {
-            let dir_node = FileNode::new_dir(CompactString::new(&file_name), Some(parent_idx));
-            let dir_idx = {
-                let mut tree = live_tree.write();
-                let idx = tree.add_node(dir_node);
-                tree.add_child(parent_idx, idx);
-                idx
-            };
-            dir_map.insert(path.clone(), dir_idx);
+            let dir_node =
+                FileNode::new_dir(CompactString::new(file_name.as_ref()), Some(parent_idx));
+
+            // Register in dir_map immediately with the pre-computed index so that
+            // child entries in the same batch can find this directory as their parent.
+            dir_map.insert(path.clone(), pre_idx);
+            pending.push(PendingEntry {
+                node: dir_node,
+                parent_idx,
+                pre_idx,
+            });
             dirs_found += 1;
         } else {
+            // Stat the file outside the lock — this is the expensive syscall.
             let (size, modified) = match std::fs::symlink_metadata(&path) {
-                Ok(meta) => {
-                    let sz = meta.len();
-                    let mod_time = meta.modified().ok();
-                    (sz, mod_time)
-                }
+                Ok(meta) => (meta.len(), meta.modified().ok()),
                 Err(err) => {
                     error_count += 1;
-                    // Create an error placeholder node so the user can see what failed.
+                    // Error node goes through the batch like any other entry.
                     let error_node = FileNode::new_error(
-                        CompactString::new(&file_name),
+                        CompactString::new(file_name.as_ref()),
                         false,
                         Some(parent_idx),
                     );
-                    {
-                        let mut tree = live_tree.write();
-                        let idx = tree.add_node(error_node);
-                        tree.add_child(parent_idx, idx);
-                    }
+                    pending.push(PendingEntry {
+                        node: error_node,
+                        parent_idx,
+                        pre_idx,
+                    });
                     let _ = progress_tx.send(ScanProgress::Error {
                         path: path.to_string_lossy().to_string(),
                         message: format!("{err}"),
                     });
+                    // Check batch capacity (continue, not return, so we flush below).
+                    if pending.len() >= BATCH_SIZE {
+                        let flushed = flush_pending(&live_tree, &mut pending);
+                        arena_base += flushed;
+                    }
                     continue;
                 }
             };
 
-            let mut file_node =
-                FileNode::new_file(CompactString::new(&file_name), size, Some(parent_idx));
+            let mut file_node = FileNode::new_file(
+                CompactString::new(file_name.as_ref()),
+                size,
+                Some(parent_idx),
+            );
             file_node.modified = modified;
-            {
-                let mut tree = live_tree.write();
-                let file_idx = tree.add_node(file_node);
-                tree.add_child(parent_idx, file_idx);
-            }
-
+            pending.push(PendingEntry {
+                node: file_node,
+                parent_idx,
+                pre_idx,
+            });
             files_found += 1;
             total_size += size;
         }
 
+        // Flush when the batch is full — one write lock for BATCH_SIZE nodes.
+        if pending.len() >= BATCH_SIZE {
+            let flushed = flush_pending(&live_tree, &mut pending);
+            arena_base += flushed;
+        }
+
         // Send progress updates roughly every 5000 entries.
-        if update_counter.is_multiple_of(5000) {
+        if update_counter.is_multiple_of(5_000) {
+            // Flush first so live sizes include these new nodes.
+            let flushed = flush_pending(&live_tree, &mut pending);
+            arena_base += flushed;
             // Run a lightweight aggregation (no expensive file-sort) so live
             // sizes are visible without blocking the scanner for long.
             {
@@ -197,6 +293,9 @@ pub fn scan_parallel(
             });
         }
     }
+
+    // Flush any remaining buffered nodes before aggregation.
+    flush_pending(&live_tree, &mut pending);
 
     // Final aggregation pass.
     debug!(
@@ -223,12 +322,19 @@ pub fn scan_parallel(
 }
 
 /// Ensure all ancestor directories exist in the tree and dir_map.
+///
+/// Called only when a parent path is missing from `dir_map` (rare, typically
+/// caused by jwalk ordering on very wide directory trees).  Each new ancestor
+/// is inserted individually with its own write lock.  `arena_base` is
+/// incremented for each inserted node so the caller's pre-computation stays
+/// accurate.
 fn ensure_ancestors(
     live_tree: &LiveTree,
     dir_map: &mut HashMap<PathBuf, NodeIndex>,
     target: &Path,
     root_path: &Path,
     root_idx: NodeIndex,
+    arena_base: &mut usize,
 ) -> NodeIndex {
     let mut missing: Vec<PathBuf> = Vec::new();
     let mut current = target.to_path_buf();
@@ -255,6 +361,7 @@ fn ensure_ancestors(
             tree.add_child(parent_idx, idx);
             idx
         };
+        *arena_base += 1;
         dir_map.insert(ancestor, idx);
         parent_idx = idx;
     }

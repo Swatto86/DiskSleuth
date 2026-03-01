@@ -154,7 +154,16 @@ impl FileTree {
     }
 
     /// Find the N largest individual files by size.
+    ///
+    /// Uses `select_nth_unstable_by` (O(n) average) to bring the top-N
+    /// elements to the front, then sorts only those N elements (O(k log k)).
+    /// This is significantly faster than a full O(n log n) sort when n >> k.
     fn compute_largest_files(&mut self, n: usize) {
+        if n == 0 {
+            self.largest_files.clear();
+            return;
+        }
+
         let mut file_indices: Vec<NodeIndex> = self
             .nodes
             .iter()
@@ -163,11 +172,23 @@ impl FileTree {
             .map(|(i, _)| NodeIndex::new(i))
             .collect();
 
-        // Partial sort: we only need the top N.
-        file_indices
-            .sort_unstable_by(|a, b| self.nodes[b.idx()].size.cmp(&self.nodes[a.idx()].size));
+        if file_indices.len() <= n {
+            // Smaller than the requested cap — full sort is fine.
+            file_indices
+                .sort_unstable_by(|a, b| self.nodes[b.idx()].size.cmp(&self.nodes[a.idx()].size));
+        } else {
+            // Partial selection: O(n) average to move top-n to the front,
+            // then O(n log n) only on the small top-n slice.
+            let pivot = n - 1;
+            file_indices.select_nth_unstable_by(pivot, |a, b| {
+                // Descending: larger files come first.
+                self.nodes[b.idx()].size.cmp(&self.nodes[a.idx()].size)
+            });
+            file_indices.truncate(n);
+            file_indices
+                .sort_unstable_by(|a, b| self.nodes[b.idx()].size.cmp(&self.nodes[a.idx()].size));
+        }
 
-        file_indices.truncate(n);
         self.largest_files = file_indices;
     }
 

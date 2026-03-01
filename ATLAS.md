@@ -349,4 +349,80 @@ release binary is a fully standalone `.exe`.
 
 ---
 
-*Last updated: 2026-03-01 — initial Atlas creation.*
+## 11. Performance Architecture
+
+The following design decisions and invariants govern performance-critical paths.
+Violating them will regress measurable scan speed or render-thread responsiveness.
+
+### 11.1 Scanner lock contention (parallel.rs)
+
+The scan loop accumulates nodes in a local `Vec<PendingEntry>` and flushes them
+to the shared `LiveTree` under a **single write lock per batch** (`BATCH_SIZE =
+2_000`).  Every `PendingEntry` carries a pre-computed `NodeIndex` equal to
+`arena_base + position_in_vec`.  Directory entries are registered in `dir_map`
+immediately with this pre-computed index so children within the same batch can
+resolve their parent without an extra lock or flush.
+
+**Invariant:** `arena_base` must be incremented by exactly the number of nodes
+inserted into `FileTree::nodes` between flushes (including nodes inserted by
+`ensure_ancestors` or error-handling paths that bypass the batch).  A mismatch
+causes `debug_assert_eq!` failures in debug builds.
+
+**Impact:** ~2 000× fewer write-lock acquisitions on a 2M-node drive (≈1 000 vs
+≈2 000 000).
+
+### 11.2 MFT Phase C — parallel metadata reads (mft.rs)
+
+USN records do not carry file sizes.  After building the tree from MFT records,
+`build_tree_from_mft` stats all file nodes with `fs::metadata`.  This is done in
+parallel with `rayon::par_iter` (read-only `full_path` traversal) followed by a
+sequential write-back pass.  `FileTree` is `Sync`, so the shared reference is
+safe across rayon threads.
+
+**Impact:** Phase C wall-clock time scales with `1 / CPU_count` on SSDs/NVMe
+instead of serial execution.
+
+### 11.3 Top-N file sort — partial select (file_tree.rs)
+
+`compute_largest_files(n)` uses `select_nth_unstable_by` (O(n) average) to
+bring the top-n indices to the front, then `sort_unstable_by` on only those n
+elements (O(k log k)).  For n = 100 on a 2M-file tree this is O(2M) instead of
+O(2M log 2M) — roughly a 20× reduction in comparisons.
+
+### 11.4 Extension categorisation — zero-heap allocation (file_types.rs)
+
+`categorise_extension` lowercases the input into a fixed `[u8; 16]` stack
+buffer.  Extensions longer than 16 bytes are short-circuited to `Other`.
+This eliminates one `String` heap allocation per file node during
+`analyse_file_types`, which processes every non-directory node in the tree.
+
+### 11.5 File-type stats caching (state.rs / chart_panel.rs)
+
+`analyse_file_types` iterates all nodes (O(n)).  It is called **once** after
+scan completion and the result is stored in `AppState::file_type_stats`.  The
+chart panel reads this cache rather than recomputing on every render frame.
+During an active scan the panel shows a placeholder message.
+
+### 11.6 Treemap navigation — no FileTree clone (state.rs / app.rs)
+
+`reveal_node_in_tree` and `treemap_go_up` previously cloned the entire
+`FileTree` to satisfy the borrow checker.  Both now use disjoint field borrows
+or internal state lookups, eliminating multi-million-node heap allocations on
+every navigation event.
+
+### 11.7 Navigation history — O(1) eviction (state.rs)
+
+`treemap_back` and `treemap_forward` are `VecDeque<NodeIndex>`.  Evicting the
+oldest entry when at capacity uses `pop_front()` (O(1)) instead of
+`Vec::remove(0)` (O(n)).
+
+### 11.8 Theme application — change-gated (app.rs)
+
+`ctx.set_visuals()` is called only when `AppState::dark_mode` changes (tracked
+via `DiskSleuthApp::last_dark_mode`), not on every frame.  The initial call at
+startup still ensures correct visual state.
+
+---
+
+*Last updated: 2026-03-01 — performance review and improvements.*
+
