@@ -55,13 +55,19 @@ impl DiskSleuthApp {
     /// The state should have been constructed by [`DiskSleuthState::build()`]
     /// *before* `eframe::run_native` is called.
     pub fn with_state(cc: &eframe::CreationContext<'_>, state: DiskSleuthState) -> Self {
-        // ── Font: Segoe UI ────────────────────────────────────────────────
-        // Load Segoe UI from the Windows fonts directory and register it as
-        // the highest-priority proportional font so every widget uses it.
+        // ── Font: Segoe UI + Segoe UI Emoji fallback ──────────────────────
+        // Load Segoe UI as the primary proportional font.  Then load Segoe UI
+        // Emoji as a fallback so that every emoji glyph (📁 📄 🔍 ⏹ ☀ 🌙 …)
+        // renders correctly.  egui walks the family list in order and uses the
+        // first font that contains the requested glyph, so the emoji font is
+        // only consulted when Segoe UI lacks a codepoint.
         let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
         let font_path = format!("{}\\Fonts\\segoeui.ttf", system_root);
+        let emoji_font_path = format!("{}\\Fonts\\seguiemj.ttf", system_root);
 
         let mut fonts = egui::FontDefinitions::default();
+
+        // Primary font — Segoe UI.
         match std::fs::read(&font_path) {
             Ok(bytes) => {
                 fonts.font_data.insert(
@@ -90,6 +96,34 @@ impl DiskSleuthApp {
                 );
             }
         }
+
+        // Emoji fallback — Segoe UI Emoji (seguiemj.ttf).
+        // Appended *after* Segoe UI so it is only used when the primary font
+        // lacks a glyph (emoji codepoints).  If the file is absent the app
+        // continues without it; emoji will fall back to egui's built-in font.
+        match std::fs::read(&emoji_font_path) {
+            Ok(bytes) => {
+                fonts.font_data.insert(
+                    "SegoeUIEmoji".to_owned(),
+                    egui::FontData::from_owned(bytes).into(),
+                );
+                // Push to the end — lowest priority, only used as fallback.
+                fonts
+                    .families
+                    .entry(egui::FontFamily::Proportional)
+                    .or_default()
+                    .push("SegoeUIEmoji".to_owned());
+                tracing::info!("Loaded Segoe UI Emoji from {}", emoji_font_path);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Could not load Segoe UI Emoji from {}: {} -- emoji may show as placeholders",
+                    emoji_font_path,
+                    e
+                );
+            }
+        }
+
         cc.egui_ctx.set_fonts(fonts);
 
         // Apply initial dark visuals.
