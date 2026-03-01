@@ -170,8 +170,7 @@ pub fn monitor_panel(ui: &mut Ui, state: &mut AppState) {
                             // File path — truncated from the left based on the
                             // available column width so the filename is always visible.
                             // Approximate 7 px per character at 12 px proportional size.
-                            let avail_chars =
-                                ((ui.available_width() / 7.0).max(20.0)) as usize;
+                            let avail_chars = ((ui.available_width() / 7.0).max(20.0)) as usize;
                             let path = truncate_path_left(&event.path, avail_chars);
                             ui.label(egui::RichText::new(path).size(12.0).color(text_col))
                                 .on_hover_text(&event.path);

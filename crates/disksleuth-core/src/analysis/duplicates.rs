@@ -24,3 +24,21 @@ pub fn find_duplicates(_tree: &FileTree) -> Vec<DuplicateGroup> {
     // Phase 2: implement hash-based duplicate detection.
     Vec::new()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test: the Phase 2 stub must return an empty vec without
+    /// panicking.  When Phase 2 is implemented this test must be updated
+    /// (or replaced) to assert the real detection behaviour.
+    #[test]
+    fn stub_returns_empty_vec() {
+        let tree = FileTree::with_capacity(0);
+        let groups = find_duplicates(&tree);
+        assert!(
+            groups.is_empty(),
+            "Phase 2 stub: find_duplicates must return empty vec"
+        );
+    }
+}

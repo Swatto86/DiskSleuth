@@ -58,6 +58,32 @@ The release binary is at `target\release\disksleuth.exe` — a single portable `
 cargo test --workspace
 ```
 
+### Debug / Verbose Logging
+
+DiskSleuth logs to **stderr** using
+[tracing](https://docs.rs/tracing/latest/tracing/).  The default log level is
+`info`.  To enable verbose diagnostic output without recompiling, set the
+`DISKSLEUTH_LOG` environment variable before running the executable:
+
+```powershell
+# Verbose debug output (function flow, state transitions, OS interactions)
+$env:DISKSLEUTH_LOG = "debug"
+.\target\release\disksleuth.exe
+
+# Full trace output (very noisy — includes every event)
+$env:DISKSLEUTH_LOG = "trace"
+.\target\release\disksleuth.exe
+
+# Reset to default (info) for the current session
+Remove-Item Env:\DISKSLEUTH_LOG
+```
+
+**Valid values** (least → most verbose): `error`, `warn`, `info` *(default)*,
+`debug`, `trace`.
+
+All output goes to **stderr** so it does not interfere with stdout.  Secrets,
+tokens, and PII are never logged at any level.
+
 ## Architecture
 
 ```

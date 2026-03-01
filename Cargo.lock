@@ -916,6 +916,7 @@ dependencies = [
  "egui",
  "egui_extras",
  "parking_lot",
+ "tempfile",
  "tracing",
 ]
 

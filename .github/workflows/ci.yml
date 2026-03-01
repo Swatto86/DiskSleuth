@@ -1,0 +1,67 @@
+# Continuous Integration — runs on every push and pull request.
+#
+# Gate order matches the update-application.ps1 release script:
+#   1. Format check   (cargo fmt -- --check)
+#   2. Lint           (cargo clippy -- -D warnings)
+#   3. Tests          (cargo test --workspace)
+#
+# All three gates must pass before a branch may be merged.
+# The release workflow (release.yml) only handles packaging; quality is
+# enforced here so every commit on main is always correct and deployable.
+
+name: CI
+
+on:
+  push:
+    branches: ["main", "master"]
+    paths-ignore:
+      - "**.md"
+      - "LICENSE"
+  pull_request:
+    branches: ["main", "master"]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  quality:
+    name: Quality Gates
+    # Windows is required: the codebase uses Win32 APIs that do not compile
+    # on other platforms.
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust (stable + components)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # rustfmt and clippy must be explicitly requested here so they are
+          # available even if the stable toolchain was installed without them.
+          components: rustfmt, clippy
+
+      - name: Cache Cargo registry and build artefacts
+        uses: swatinem/rust-cache@v2
+
+      # ── Gate 1: Format ──────────────────────────────────────────────────
+      - name: Check formatting (cargo fmt)
+        run: cargo fmt --all -- --check
+
+      # ── Gate 2: Lint ────────────────────────────────────────────────────
+      - name: Lint (cargo clippy)
+        # -D warnings promotes every Clippy warning to an error so the build
+        # fails rather than silently accumulating lint debt.
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # ── Gate 3: Tests ───────────────────────────────────────────────────
+      - name: Run tests (cargo test)
+        run: cargo test --workspace
+
+      # ── Bonus: Debug build ──────────────────────────────────────────────
+      # A debug build validates that the codebase compiles correctly even
+      # outside of --release optimisations, catching any conditional-compile
+      # discrepancies between debug and release profiles.
+      - name: Debug build
+        run: cargo build --workspace

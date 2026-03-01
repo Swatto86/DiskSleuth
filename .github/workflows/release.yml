@@ -109,9 +109,21 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
+
+      # ── Quality gates — must all pass before packaging ──────────────────
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint (clippy)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo test --workspace
 
       - name: Build release binary
         run: cargo build --release

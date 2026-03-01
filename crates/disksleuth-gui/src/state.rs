@@ -62,6 +62,14 @@ const MAX_MONITOR_MESSAGES_PER_FRAME: usize = 200;
 /// nodes to explore deeper subtrees.
 const MAX_VISIBLE_ROWS: usize = 500_000;
 
+/// Maximum number of per-file scan errors retained in `AppState::scan_errors`.
+///
+/// Bounds memory and rendering cost for the error list. Errors beyond this
+/// limit are counted (via `scan_error_count`) but not stored individually.
+/// 1 000 errors gives more than enough context to diagnose access-denied
+/// patterns without unbounded growth on heavily-restricted volumes.
+const MAX_SCAN_ERRORS: usize = 1_000;
+
 /// All application state.
 pub struct AppState {
     // ── Drives ─────────────────────────────────────────
@@ -338,7 +346,7 @@ impl AppState {
                 }
                 ScanProgress::Error { path, message } => {
                     self.scan_error_count += 1;
-                    if self.scan_errors.len() < 1000 {
+                    if self.scan_errors.len() < MAX_SCAN_ERRORS {
                         self.scan_errors.push((path, message));
                     }
                 }
