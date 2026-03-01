@@ -13,7 +13,17 @@ pub struct StaleFile {
 
 /// Find files not modified in the last `min_age_days` days,
 /// sorted by size descending.
+///
+/// Returns an empty vec immediately when `max_results == 0`, which also
+/// avoids an integer underflow (`max_results - 1` wrapping to `usize::MAX`)
+/// that would panic inside `select_nth_unstable_by`.
 pub fn find_stale_files(tree: &FileTree, min_age_days: u64, max_results: usize) -> Vec<StaleFile> {
+    // Guard: requesting zero results is always satisfiable trivially, and
+    // prevents the `max_results - 1` subtraction below from underflowing.
+    if max_results == 0 {
+        return Vec::new();
+    }
+
     let now = SystemTime::now();
     let threshold = Duration::from_secs(min_age_days * 24 * 3600);
 
@@ -157,6 +167,25 @@ mod tests {
 
         let result = find_stale_files(&tree, 0, 100);
         assert!(result.is_empty(), "directories must be excluded");
+    }
+
+    /// Regression test: `max_results == 0` must return an empty vec without
+    /// panicking.  Previously, `max_results - 1` would underflow (usize wraps
+    /// to `usize::MAX`) and `select_nth_unstable_by(usize::MAX, …)` would
+    /// panic with an out-of-bounds index.
+    #[test]
+    fn zero_max_results_does_not_panic() {
+        let mut tree = FileTree::with_capacity(3);
+        let root = tree.add_root(CompactString::new("C:"));
+
+        let old = file_with_age("old.log", 1024, root, 400);
+        let idx = tree.add_node(old);
+        tree.add_child(root, idx);
+        tree.aggregate_sizes();
+
+        // Must NOT panic and must return an empty vec.
+        let result = find_stale_files(&tree, 0, 0);
+        assert!(result.is_empty(), "max_results=0 must always return empty");
     }
 
     /// A file without a `modified` timestamp (e.g. an error placeholder)

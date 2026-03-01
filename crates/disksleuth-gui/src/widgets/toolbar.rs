@@ -113,9 +113,9 @@ pub fn toolbar(ui: &mut Ui, state: &mut AppState) {
 
             ui.separator();
 
-            // Elevation indicator.
-            let elevated = disksleuth_core::platform::is_elevated();
-            if elevated {
+            // Elevation indicator — read from cached AppState field (computed once
+            // at startup) rather than calling is_elevated() on every frame.
+            if state.is_elevated {
                 ui.label(
                     egui::RichText::new("🛡 Admin")
                         .size(11.0)

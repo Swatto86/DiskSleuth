@@ -260,8 +260,32 @@ fn parse_and_send_events(
 
         // Extract the variable-length UTF-16 filename that follows the struct.
         let name_chars = fni.FileNameLength as usize / 2;
-        // SAFETY: `FileName` is immediately followed by (name_chars - 1) additional
-        // u16 code units in the same kernel-allocated buffer.
+
+        // Safety pre-condition: verify the entire FileName array lies within
+        // the valid buffer slice before handing a raw pointer to from_raw_parts.
+        //
+        // `&fni.FileName` points to the first u16 of the variable-length name
+        // embedded in the kernel buffer.  If FileNameLength is corrupted or
+        // the record is truncated, accessing beyond total_bytes is UB.
+        //
+        // We compute the byte offset of FileName relative to buffer.as_ptr()
+        // using pointer arithmetic (no hardcoded field offset needed).
+        // Pointer-to-integer casts (`*const T as usize`) are allowed in safe
+        // code; no unsafe block is required here.
+        let name_byte_start =
+            (&fni.FileName as *const u16 as usize).saturating_sub(buffer.as_ptr() as usize);
+        if name_chars == 0 || name_byte_start + fni.FileNameLength as usize > total_bytes {
+            // Record is malformed or name is empty — skip it and advance via
+            // NextEntryOffset (handled at the bottom of the loop).
+            if fni.NextEntryOffset == 0 {
+                break;
+            }
+            offset += fni.NextEntryOffset as usize;
+            continue;
+        }
+
+        // SAFETY: bounds check above guarantees all name_chars u16 values lie
+        // within the valid kernel-filled buffer slice.
         let name_slice =
             unsafe { std::slice::from_raw_parts(&fni.FileName as *const u16, name_chars) };
         let relative_name = String::from_utf16_lossy(name_slice);

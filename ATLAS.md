@@ -35,7 +35,7 @@ dependencies.
 | **LiveTree** | `Arc<RwLock<FileTree>>` shared between the scan thread and the UI. The scanner holds a write lock for brief batch inserts; the UI holds a read lock per frame. |
 | **ScanHandle** | Returned by `start_scan()`. Carries the progress channel receiver, the LiveTree reference, and the cancellation flag. |
 | **ScanProgress** | Enum of messages the scan thread sends to the UI: `ScanTier`, `Update`, `Error`, `Complete`, `Cancelled`. |
-| **AppState** | All mutable GUI state. Owns the scan handle, live tree reference, final tree, visible-row list, treemap navigation stacks, monitor handle, and UI flags. |
+| **AppState** | All mutable GUI state. Owns the scan handle, live tree reference, final tree, visible-row list, treemap navigation stacks, monitor handle, UI flags, and cached elevation status (`is_elevated`). |
 | **VisibleRow** | Flat entry in the virtualised tree-view: `NodeIndex + depth + is_expanded`. |
 | **AppPhase** | `Idle | Scanning | Results` — the top-level state machine of the application. |
 | **Treemap** | Squarified layout of `FileNode` rectangles. Painter-based (no retained geometry). Click navigates into a directory. |
@@ -311,6 +311,11 @@ These invariants MUST hold at all times. Violations are bugs.
    every 1 000 entries. The monitor checks it at most every 200 ms. Maximum
    latency to actual stop is bounded by these intervals.
 
+11. **`start_scan` cancels any in-progress scan:** `AppState::start_scan`
+    always calls `cancel_scan()` before starting a new scan, ensuring the old
+    scan thread sets its stop flag and the orphaned-thread scenario is
+    impossible even if future code paths call `start_scan` while scanning.
+
 8. **Log level default is INFO:** `DISKSLEUTH_LOG` absent = INFO. Debug/trace
    level must never be active in release builds by default. Secrets and PII
    must never be logged at any level.
@@ -422,7 +427,16 @@ oldest entry when at capacity uses `pop_front()` (O(1)) instead of
 via `DiskSleuthApp::last_dark_mode`), not on every frame.  The initial call at
 startup still ensures correct visual state.
 
+### 11.9 Elevation check — cached in AppState (state.rs / toolbar.rs)
+
+`is_elevated()` (`OpenProcessToken` + `GetTokenInformation` + `CloseHandle`)
+is called **once** inside `AppState::new()` and stored in `AppState::is_elevated`.
+The toolbar reads this cached field rather than issuing three Win32 syscalls on
+every render frame.  Elevation status is immutable for the lifetime of a process,
+so caching is always correct.
+
 ---
 
-*Last updated: 2026-03-01 — performance review and improvements.*
+*Last updated: 2026-03-01 — codebase audit: 4 bugs fixed (age.rs usize underflow,
+monitor bounds check, is_elevated per-frame syscall, start_scan orphan thread).*
 

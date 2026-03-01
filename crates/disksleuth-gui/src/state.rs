@@ -76,6 +76,13 @@ pub struct AppState {
     // ── Drives ─────────────────────────────────────────
     pub drives: Vec<DriveInfo>,
     pub selected_drive_index: Option<usize>,
+    /// Whether the process is running with administrator privileges.
+    ///
+    /// Computed once at startup via `is_elevated()` and cached here.
+    /// Elevation status never changes for the lifetime of a process, so
+    /// caching avoids an `OpenProcessToken` + `GetTokenInformation` +
+    /// `CloseHandle` round-trip on every render frame.
+    pub is_elevated: bool,
 
     // ── Scan ───────────────────────────────────────────
     pub phase: AppPhase,
@@ -151,10 +158,13 @@ impl AppState {
     pub fn new() -> Self {
         let drives = disksleuth_core::platform::enumerate_drives();
         let selected = if drives.is_empty() { None } else { Some(0) };
+        // Compute elevation once at startup — never changes within a process.
+        let is_elevated = disksleuth_core::platform::is_elevated();
 
         Self {
             drives,
             selected_drive_index: selected,
+            is_elevated,
             phase: AppPhase::Idle,
             scan_handle: None,
             scan_files_found: 0,
@@ -190,7 +200,17 @@ impl AppState {
     }
 
     /// Start a scan of the selected drive or path.
+    ///
+    /// Cancels any in-progress scan before starting the new one.  The old
+    /// scan thread sets its cancel flag and stops at the next check point
+    /// (~1000 entries); it does not block here.  Without this call the old
+    /// thread would become an orphan, continuing to run and consume CPU
+    /// until its own scan completes.
     pub fn start_scan(&mut self, path: std::path::PathBuf) {
+        // Cancel any running scan so its thread stops cleanly.
+        // This is safe to call even when no scan is in progress.
+        self.cancel_scan();
+
         // Reset scan state.
         self.phase = AppPhase::Scanning;
         self.scan_files_found = 0;
