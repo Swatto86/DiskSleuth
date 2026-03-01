@@ -71,6 +71,27 @@ pub fn is_mft_available(path: &Path) -> bool {
         return false;
     }
 
+    // MFT scanning only makes sense for a drive root (e.g. "C:\" or "C:").
+    // Scanning a subdirectory via MFT requires enumerating the ENTIRE volume
+    // first and filtering afterwards, which is far slower than the parallel
+    // walker for targeted subdirectory scans and will exhaust the 30-second
+    // test timeout when run against a large drive.
+    let is_drive_root = match path_str.len() {
+        2 => path_str.as_bytes()[1] == b':',
+        3 => {
+            path_str.as_bytes()[1] == b':'
+                && (path_str.as_bytes()[2] == b'\\' || path_str.as_bytes()[2] == b'/')
+        }
+        _ => false,
+    };
+    if !is_drive_root {
+        tracing::debug!(
+            "MFT not available: '{}' is not a drive root — using parallel walker",
+            path_str
+        );
+        return false;
+    }
+
     // Check filesystem is NTFS.
     let root: String = format!("{}\\", &path_str[..2]);
     let root_wide: Vec<u16> = root.encode_utf16().chain(std::iter::once(0)).collect();
