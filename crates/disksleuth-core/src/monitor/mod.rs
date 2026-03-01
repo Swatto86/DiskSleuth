@@ -212,7 +212,16 @@ fn run_monitor(path: PathBuf, cancel: Arc<AtomicBool>, tx: Sender<MonitorMessage
                 continue;
             } else {
                 // Error or handle closed unexpectedly.
+                // Cancel the outstanding IO before breaking so that the kernel
+                // stops referencing `overlapped` (which lives on this stack frame)
+                // before we exit the loop and it goes out of scope.
                 warn!("Monitor: WaitForSingleObject returned unexpected value");
+                unsafe {
+                    let _ = CancelIoEx(dir_handle, Some(&overlapped));
+                    // Wait up to 1 s for the kernel to acknowledge the cancellation
+                    // so OVERLAPPED is no longer referenced when it goes out of scope.
+                    WaitForSingleObject(io_event, 1000);
+                }
                 break 'outer;
             }
         }
@@ -227,9 +236,12 @@ fn run_monitor(path: PathBuf, cancel: Arc<AtomicBool>, tx: Sender<MonitorMessage
     }
 
     // Normal exit — clean up handles.
+    // Close the directory handle FIRST: closing it cancels any kernel-side
+    // reference to the OVERLAPPED structure (which holds io_event).  Only
+    // then is it safe to close io_event itself.
     unsafe {
-        let _ = CloseHandle(io_event);
         let _ = CloseHandle(dir_handle);
+        let _ = CloseHandle(io_event);
     }
 
     debug!("Monitor: stopped for {:?}", path);

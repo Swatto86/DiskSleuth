@@ -500,34 +500,47 @@ impl AppState {
         }
     }
 
-    /// Recursively build visible rows, respecting expanded state.
+    /// Iteratively build visible rows, respecting expanded state.
     ///
-    /// Stops inserting once [`MAX_VISIBLE_ROWS`] is reached so the live tree
-    /// view does not allocate unbounded memory on fully-expanded deep trees.
+    /// Converted from recursion to an explicit stack to prevent call-stack
+    /// exhaustion on deeply nested directory trees (e.g. node_modules chains
+    /// hundreds of levels deep).  Stops inserting once [`MAX_VISIBLE_ROWS`]
+    /// is reached so the live tree view does not allocate unbounded memory
+    /// on fully-expanded deep trees.
     fn build_live_rows_recursive(
         &mut self,
         tree: &FileTree,
         node_idx: NodeIndex,
-        depth: u16,
+        start_depth: u16,
         expanded: &std::collections::HashSet<NodeIndex>,
     ) {
-        // Hard cap: stop adding rows once the limit is reached.
-        if self.visible_rows.len() >= MAX_VISIBLE_ROWS {
-            return;
-        }
+        // Explicit DFS stack: (node_index, depth).
+        // Children are pushed in reverse order so the first child is popped first,
+        // preserving the same top-to-bottom visual order as the old recursive version.
+        let mut stack: Vec<(NodeIndex, u16)> = Vec::with_capacity(64);
+        stack.push((node_idx, start_depth));
 
-        let is_expanded = expanded.contains(&node_idx) && tree.node(node_idx).is_dir;
+        while let Some((current_idx, depth)) = stack.pop() {
+            // Hard cap: stop adding rows once the limit is reached.
+            if self.visible_rows.len() >= MAX_VISIBLE_ROWS {
+                return;
+            }
 
-        self.visible_rows.push(VisibleRow {
-            node_index: node_idx,
-            depth,
-            is_expanded,
-        });
+            let is_expanded = expanded.contains(&current_idx) && tree.node(current_idx).is_dir;
 
-        if is_expanded {
-            let children = tree.children_sorted_by_size(node_idx);
-            for child_idx in children {
-                self.build_live_rows_recursive(tree, child_idx, depth + 1, expanded);
+            self.visible_rows.push(VisibleRow {
+                node_index: current_idx,
+                depth,
+                is_expanded,
+            });
+
+            if is_expanded {
+                let children = tree.children_sorted_by_size(current_idx);
+                // Push in reverse so the first child is processed first (LIFO stack).
+                let next_depth = depth.saturating_add(1);
+                for child_idx in children.into_iter().rev() {
+                    stack.push((child_idx, next_depth));
+                }
             }
         }
     }

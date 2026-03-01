@@ -562,6 +562,9 @@ fn build_tree_from_mft(
         tree.nodes[i].allocated_size = size;
         tree.nodes[i].modified = modified;
         if is_error {
+            // Mark the node so the UI can render the error icon and
+            // the details panel can show the "access denied" badge.
+            tree.nodes[i].is_error = true;
             phase_c_errors += 1;
         }
     }

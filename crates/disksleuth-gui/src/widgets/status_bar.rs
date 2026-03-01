@@ -150,10 +150,30 @@ pub fn status_bar(ui: &mut Ui, state: &AppState) {
 
 /// Truncate a path string to fit within `max_len` characters,
 /// replacing the middle with "..." if needed.
+///
+/// Uses character counts rather than byte lengths to avoid panicking on
+/// multi-byte UTF-8 paths (Cyrillic, CJK, accented characters, emoji, etc.).
 fn truncate_path(path: &str, max_len: usize) -> String {
-    if path.len() <= max_len {
+    // Guard: if max_len is too small to hold the ellipsis prefix, just return a safe fallback.
+    if max_len < 4 {
+        return path.chars().take(max_len).collect();
+    }
+    let char_count = path.chars().count();
+    if char_count <= max_len {
         return path.to_string();
     }
     let half = (max_len - 3) / 2;
-    format!("{}...{}", &path[..half], &path[path.len() - half..])
+    // Collect char-boundary byte offsets so we never slice inside a multi-byte
+    // scalar value.  `char_indices` returns `(byte_offset, char)` pairs.
+    let start_byte = path
+        .char_indices()
+        .nth(half)
+        .map(|(i, _)| i)
+        .unwrap_or(path.len());
+    let end_byte = path
+        .char_indices()
+        .nth(char_count - half)
+        .map(|(i, _)| i)
+        .unwrap_or(path.len());
+    format!("{}...{}", &path[..start_byte], &path[end_byte..])
 }

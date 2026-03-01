@@ -406,21 +406,15 @@ fn context_menu(ui: &mut Ui, state: &AppState, node_index: disksleuth_core::mode
     let node = tree.node(node_index);
 
     if ui.button("📂 Open in Explorer").clicked() {
-        let path = if node.is_dir {
+        // For directories: open the folder itself.  For files: open the
+        // parent folder with the file pre-selected via "/select,<path>".
+        let explorer_arg = if node.is_dir {
             full_path.clone()
         } else {
-            // Open the parent directory with the file selected.
-            std::path::Path::new(&full_path)
-                .parent()
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or(full_path.clone())
+            format!("/select,{}", full_path)
         };
         let _ = std::process::Command::new("explorer.exe")
-            .arg(if node.is_dir {
-                path
-            } else {
-                format!("/select,{}", full_path)
-            })
+            .arg(explorer_arg)
             .spawn();
         ui.close_menu();
     }
