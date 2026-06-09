@@ -128,7 +128,7 @@ pub fn analyse_file_types(tree: &FileTree) -> Vec<CategoryStats> {
     }
 
     let mut results: Vec<CategoryStats> = map.into_values().collect();
-    results.sort_by(|a, b| b.total_size.cmp(&a.total_size));
+    results.sort_by_key(|s| std::cmp::Reverse(s.total_size));
     results
 }
 

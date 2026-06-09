@@ -195,10 +195,7 @@ impl FileTree {
                 continue; // roots are always directories; be defensive
             }
             stack.push((r, self.nodes[r].first_child));
-            loop {
-                let Some(&(dir_idx, cursor)) = stack.last() else {
-                    break;
-                };
+            while let Some(&(dir_idx, cursor)) = stack.last() {
                 match cursor {
                     Some(child) => {
                         let c = child.idx();

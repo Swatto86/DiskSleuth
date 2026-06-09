@@ -56,7 +56,7 @@ pub fn find_stale_files(tree: &FileTree, min_age_days: u64, max_results: usize) 
         stale.select_nth_unstable_by(max_results - 1, |a, b| b.size.cmp(&a.size));
         stale.truncate(max_results);
     }
-    stale.sort_unstable_by(|a, b| b.size.cmp(&a.size));
+    stale.sort_unstable_by_key(|f| std::cmp::Reverse(f.size));
     stale
 }
 
