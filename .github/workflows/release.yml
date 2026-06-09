@@ -20,6 +20,10 @@ on:
       version:
         description: 'Version to release (e.g., 0.2.0)'
         required: true
+      notes:
+        description: 'Release notes (Markdown). Used when no vX.Y.Z tag annotation exists.'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -51,12 +55,22 @@ jobs:
 
       - name: Get release notes from tag
         id: get-notes
+        env:
+          # Notes supplied directly to a workflow_dispatch run. Passed via an
+          # environment variable (not template interpolation inside the
+          # script) so arbitrary Markdown cannot inject shell commands.
+          DISPATCH_NOTES: ${{ github.event.inputs.notes }}
         run: |
           TAG_NAME="v${{ steps.get-version.outputs.version }}"
           echo "Extracting release notes for tag: $TAG_NAME"
 
-          # Use git for-each-ref to get the full tag annotation
-          NOTES=$(git for-each-ref --format='%(contents)' "refs/tags/$TAG_NAME" 2>/dev/null || echo "")
+          # Manual runs may provide notes directly (no tag exists yet).
+          NOTES="$DISPATCH_NOTES"
+
+          # Otherwise use git for-each-ref to get the full tag annotation
+          if [ -z "$(echo "$NOTES" | tr -d '[:space:]')" ]; then
+            NOTES=$(git for-each-ref --format='%(contents)' "refs/tags/$TAG_NAME" 2>/dev/null || echo "")
+          fi
 
           # If empty, try fallback
           if [ -z "$(echo "$NOTES" | tr -d '[:space:]')" ]; then
