@@ -144,6 +144,16 @@ pub fn status_bar(ui: &mut Ui, state: &AppState) {
                             .color(color_warning),
                         );
                     }
+
+                    if let Some(ref status) = state.export_status {
+                        ui.separator();
+                        let color = if status.starts_with("Export failed") {
+                            color_warning
+                        } else {
+                            color_success
+                        };
+                        ui.label(egui::RichText::new(status).size(12.0).color(color));
+                    }
                 }
             }
         }

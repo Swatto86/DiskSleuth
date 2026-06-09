@@ -210,6 +210,15 @@ pub fn scan_parallel(
         let file_name = entry.file_name().to_string_lossy();
 
         if entry.file_type().is_dir() {
+            // `ensure_ancestors` may already have created this directory if
+            // jwalk yielded one of its children before the directory's own
+            // entry. Creating a second node would duplicate the whole
+            // subtree in the UI, so keep the existing node and only count it.
+            if dir_map.contains_key(&path) {
+                dirs_found += 1;
+                continue;
+            }
+
             let dir_node =
                 FileNode::new_dir(CompactString::new(file_name.as_ref()), Some(parent_idx));
 

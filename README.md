@@ -134,7 +134,8 @@ disksleuth/
 
 ## Roadmap
 
-- [ ] Export scan results to CSV / JSON
+- [x] Export scan results to CSV (toolbar → Documents folder)
+- [ ] Export scan results to JSON
 - [ ] Duplicate file detection
 - [ ] File type pie / donut chart
 - [ ] Keyboard navigation (arrow keys, vim-style)

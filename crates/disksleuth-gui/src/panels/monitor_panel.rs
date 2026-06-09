@@ -74,8 +74,13 @@ pub fn monitor_panel(ui: &mut Ui, state: &mut AppState) {
                         .on_hover_text("Start monitoring the selected drive for file writes")
                         .clicked()
                     {
-                        if let Some(idx) = state.selected_drive_index {
-                            let path = state.drives[idx].path.clone();
+                        // `.get()` rather than indexing: the drive list may
+                        // have shrunk since the selection was made.
+                        if let Some(path) = state
+                            .selected_drive_index
+                            .and_then(|idx| state.drives.get(idx))
+                            .map(|d| d.path.clone())
+                        {
                             state.start_monitor(path);
                         }
                     }

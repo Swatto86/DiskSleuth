@@ -80,12 +80,14 @@ impl FileTree {
         self.aggregate_sizes_inner(false);
     }
 
-    /// Compute sizes, descendant counts, and percentages in a single bottom-up pass.
+    /// Compute sizes, descendant counts, and percentages in a bottom-up pass.
     ///
-    /// Because children are always inserted after their parent in the arena
-    /// (scan order is parent-first), iterating in *reverse* guarantees that
-    /// every child is processed before its parent. This gives O(n) aggregation
-    /// with no recursion and no stack.
+    /// When every node's parent precedes it in the arena (the parallel walker
+    /// guarantees this by construction), a single cache-friendly *reverse*
+    /// index pass rolls children up before their parents. Trees built from
+    /// MFT records do **not** guarantee that order — NTFS reuses record
+    /// numbers, so a child's record can precede its parent's — and fall back
+    /// to an explicit-stack post-order traversal. Both paths are O(n).
     ///
     /// Safe to call repeatedly (e.g. during a live scan) — directory sizes
     /// are reset before each pass so values don't accumulate.
@@ -99,11 +101,12 @@ impl FileTree {
     /// Internal implementation shared by [`aggregate_sizes`] and
     /// [`aggregate_sizes_live`].
     fn aggregate_sizes_inner(&mut self, compute_largest: bool) {
-        // Reset directory aggregation fields and simultaneously count files.
-        // Counting here piggy-backs on the O(n) reset loop so we avoid a
-        // dedicated second pass that would be O(n) per render frame.
+        // Reset directory aggregation fields and simultaneously count files
+        // and verify the parent-before-child arena ordering. Both piggy-back
+        // on the O(n) reset loop so no dedicated extra pass is needed.
         let mut file_count = 0u64;
-        for node in self.nodes.iter_mut() {
+        let mut parents_precede_children = true;
+        for (i, node) in self.nodes.iter_mut().enumerate() {
             if node.is_dir {
                 node.size = 0;
                 node.allocated_size = 0;
@@ -111,33 +114,42 @@ impl FileTree {
             } else {
                 file_count += 1;
             }
+            if let Some(parent_idx) = node.parent {
+                if parent_idx.idx() >= i {
+                    parents_precede_children = false;
+                }
+            }
         }
         self.file_count = file_count;
 
-        // Reverse pass: children before parents.
-        for i in (0..self.nodes.len()).rev() {
-            let node = &self.nodes[i];
-            if !node.is_dir {
-                // Leaf file — nothing to sum, but propagate to parent.
-                let size = node.size;
-                let alloc = node.allocated_size;
-                if let Some(parent_idx) = node.parent {
-                    self.nodes[parent_idx.idx()].size += size;
-                    self.nodes[parent_idx.idx()].allocated_size += alloc;
-                    self.nodes[parent_idx.idx()].descendant_count += 1;
-                }
-            } else {
-                // Directory — its size/count are already accumulated from children.
-                // Propagate upward to its own parent.
-                let size = self.nodes[i].size;
-                let alloc = self.nodes[i].allocated_size;
-                let desc = self.nodes[i].descendant_count;
-                if let Some(parent_idx) = self.nodes[i].parent {
-                    self.nodes[parent_idx.idx()].size += size;
-                    self.nodes[parent_idx.idx()].allocated_size += alloc;
-                    self.nodes[parent_idx.idx()].descendant_count += desc;
+        if parents_precede_children {
+            // Reverse pass: children before parents.
+            for i in (0..self.nodes.len()).rev() {
+                let node = &self.nodes[i];
+                if !node.is_dir {
+                    // Leaf file — nothing to sum, but propagate to parent.
+                    let size = node.size;
+                    let alloc = node.allocated_size;
+                    if let Some(parent_idx) = node.parent {
+                        self.nodes[parent_idx.idx()].size += size;
+                        self.nodes[parent_idx.idx()].allocated_size += alloc;
+                        self.nodes[parent_idx.idx()].descendant_count += 1;
+                    }
+                } else {
+                    // Directory — its size/count are already accumulated from children.
+                    // Propagate upward to its own parent.
+                    let size = self.nodes[i].size;
+                    let alloc = self.nodes[i].allocated_size;
+                    let desc = self.nodes[i].descendant_count;
+                    if let Some(parent_idx) = self.nodes[i].parent {
+                        self.nodes[parent_idx.idx()].size += size;
+                        self.nodes[parent_idx.idx()].allocated_size += alloc;
+                        self.nodes[parent_idx.idx()].descendant_count += desc;
+                    }
                 }
             }
+        } else {
+            self.aggregate_post_order();
         }
 
         // Compute percent_of_parent for every node.
@@ -162,6 +174,60 @@ impl FileTree {
         // every N entries while the scan thread is actively inserting nodes.
         if compute_largest {
             self.compute_largest_files(100);
+        }
+    }
+
+    /// Bottom-up roll-up for trees whose arena order does not satisfy the
+    /// parent-before-child invariant (e.g. MFT scans on volumes where record
+    /// numbers were reused).
+    ///
+    /// Walks each root with an explicit-stack post-order traversal over the
+    /// `first_child` / `next_sibling` links, accumulating file sizes into
+    /// their directory and propagating directory totals to the parent as the
+    /// stack unwinds. O(n); the stack depth is bounded by the tree depth.
+    fn aggregate_post_order(&mut self) {
+        let roots = self.roots.clone();
+        // Stack entries: (node arena index, next child to visit).
+        let mut stack: Vec<(usize, Option<NodeIndex>)> = Vec::with_capacity(64);
+        for root in roots {
+            let r = root.idx();
+            if !self.nodes[r].is_dir {
+                continue; // roots are always directories; be defensive
+            }
+            stack.push((r, self.nodes[r].first_child));
+            loop {
+                let Some(&(dir_idx, cursor)) = stack.last() else {
+                    break;
+                };
+                match cursor {
+                    Some(child) => {
+                        let c = child.idx();
+                        // Advance the cursor before descending.
+                        stack.last_mut().expect("stack is non-empty").1 =
+                            self.nodes[c].next_sibling;
+                        if self.nodes[c].is_dir {
+                            stack.push((c, self.nodes[c].first_child));
+                        } else {
+                            self.nodes[dir_idx].size += self.nodes[c].size;
+                            self.nodes[dir_idx].allocated_size += self.nodes[c].allocated_size;
+                            self.nodes[dir_idx].descendant_count += 1;
+                        }
+                    }
+                    None => {
+                        // All children processed — pop and propagate this
+                        // directory's totals into the parent on the stack.
+                        stack.pop();
+                        if let Some(&(parent_idx, _)) = stack.last() {
+                            let size = self.nodes[dir_idx].size;
+                            let alloc = self.nodes[dir_idx].allocated_size;
+                            let desc = self.nodes[dir_idx].descendant_count;
+                            self.nodes[parent_idx].size += size;
+                            self.nodes[parent_idx].allocated_size += alloc;
+                            self.nodes[parent_idx].descendant_count += desc;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -305,6 +371,85 @@ mod tests {
         assert_eq!(tree.node(dir).descendant_count, 2);
         assert_eq!(tree.node(root).descendant_count, 2);
         assert_eq!(tree.total_size, 300);
+    }
+
+    /// Regression test: trees built from MFT records can allocate a child in
+    /// the arena *before* its parent (NTFS reuses record numbers). The old
+    /// reverse-index pass propagated a directory's total to its parent before
+    /// all of the directory's own children had been added, silently dropping
+    /// their sizes from every ancestor.
+    #[test]
+    fn test_aggregation_with_child_before_parent_in_arena() {
+        let mut tree = FileTree::with_capacity(8);
+        let root = tree.add_root(CompactString::new("C:")); // arena idx 0
+
+        // Allocate bottom-up so every child has a LOWER arena index than its
+        // parent, then wire the hierarchy: root -> outer -> inner -> files.
+        let deep_file = tree.add_node(FileNode::new_file(
+            CompactString::new("deep.bin"),
+            500,
+            None,
+        )); // idx 1
+        let inner = tree.add_node(FileNode::new_dir(CompactString::new("inner"), None)); // idx 2
+        let outer = tree.add_node(FileNode::new_dir(CompactString::new("outer"), None)); // idx 3
+        let shallow_file = tree.add_node(FileNode::new_file(
+            CompactString::new("shallow.txt"),
+            250,
+            None,
+        )); // idx 4
+
+        tree.add_child(root, outer);
+        tree.add_child(outer, inner);
+        tree.add_child(inner, deep_file);
+        tree.add_child(outer, shallow_file);
+
+        tree.aggregate_sizes();
+
+        assert_eq!(tree.node(inner).size, 500);
+        assert_eq!(tree.node(outer).size, 750);
+        assert_eq!(tree.node(root).size, 750);
+        assert_eq!(tree.node(inner).descendant_count, 1);
+        assert_eq!(tree.node(outer).descendant_count, 2);
+        assert_eq!(tree.node(root).descendant_count, 2);
+        assert_eq!(tree.total_size, 750);
+        assert_eq!(tree.file_count, 2);
+    }
+
+    /// Both aggregation strategies (reverse pass and post-order fallback)
+    /// must produce identical results on the same logical tree.
+    #[test]
+    fn test_aggregation_order_independent() {
+        // In-order arena: parent-first (uses the fast reverse pass).
+        let mut in_order = FileTree::with_capacity(8);
+        let root_a = in_order.add_root(CompactString::new("C:"));
+        let dir_a = in_order.add_node(FileNode::new_dir(CompactString::new("d"), None));
+        in_order.add_child(root_a, dir_a);
+        let f1_a = in_order.add_node(FileNode::new_file(CompactString::new("a"), 100, None));
+        in_order.add_child(dir_a, f1_a);
+        let f2_a = in_order.add_node(FileNode::new_file(CompactString::new("b"), 200, None));
+        in_order.add_child(root_a, f2_a);
+        in_order.aggregate_sizes();
+
+        // Out-of-order arena: same hierarchy, children allocated first
+        // (forces the post-order fallback).
+        let mut out_of_order = FileTree::with_capacity(8);
+        let root_b = out_of_order.add_root(CompactString::new("C:"));
+        let f1_b = out_of_order.add_node(FileNode::new_file(CompactString::new("a"), 100, None));
+        let f2_b = out_of_order.add_node(FileNode::new_file(CompactString::new("b"), 200, None));
+        let dir_b = out_of_order.add_node(FileNode::new_dir(CompactString::new("d"), None));
+        out_of_order.add_child(root_b, dir_b);
+        out_of_order.add_child(dir_b, f1_b);
+        out_of_order.add_child(root_b, f2_b);
+        out_of_order.aggregate_sizes();
+
+        assert_eq!(in_order.total_size, out_of_order.total_size);
+        assert_eq!(in_order.file_count, out_of_order.file_count);
+        assert_eq!(in_order.node(root_a).size, out_of_order.node(root_b).size);
+        assert_eq!(in_order.node(dir_a).size, out_of_order.node(dir_b).size);
+        assert_eq!(
+            in_order.node(root_a).descendant_count,
+            out_of_order.node(root_b).descendant_count
+        );
     }
 
     #[test]

@@ -107,7 +107,15 @@ pub fn analyse_file_types(tree: &FileTree) -> Vec<CategoryStats> {
             continue;
         }
 
-        let ext = node.name.rsplit('.').next().unwrap_or("");
+        // Extension = text after the last '.', only when that dot is neither
+        // the first nor the last character. Matches `Path::extension`
+        // semantics so extensionless names ("log"), dotfiles (".gitignore"),
+        // and trailing dots ("name.") are not mistaken for extensions.
+        let name = node.name.as_str();
+        let ext = match name.rfind('.') {
+            Some(pos) if pos > 0 && pos + 1 < name.len() => &name[pos + 1..],
+            _ => "",
+        };
         let cat = categorise_extension(ext);
 
         let entry = map.entry(cat).or_insert_with(|| CategoryStats {
@@ -244,6 +252,43 @@ mod tests {
             stats.is_empty(),
             "expected no category stats when there are no files"
         );
+    }
+
+    /// Regression test: a file whose *name* matches a known extension but has
+    /// no dot ("log", "dat") must NOT be categorised as if it had that
+    /// extension; dotfiles (".gitignore") and trailing dots ("name.") have no
+    /// extension either. Files with a real extension still categorise.
+    #[test]
+    fn analyse_extensionless_names_are_other() {
+        let mut tree = FileTree::with_capacity(6);
+        let root = tree.add_root(CompactString::new("C:"));
+
+        for name in ["log", ".gitignore", "name."] {
+            let f = tree.add_node(FileNode::new_file(CompactString::new(name), 10, Some(root)));
+            tree.add_child(root, f);
+        }
+        // Control: a real ".log" extension is still System.
+        let real = tree.add_node(FileNode::new_file(
+            CompactString::new("trace.log"),
+            40,
+            Some(root),
+        ));
+        tree.add_child(root, real);
+        tree.aggregate_sizes();
+
+        let stats = analyse_file_types(&tree);
+        let other = stats
+            .iter()
+            .find(|s| s.category == Some(FileCategory::Other))
+            .expect("Other category missing");
+        let system = stats
+            .iter()
+            .find(|s| s.category == Some(FileCategory::System))
+            .expect("System category missing");
+
+        assert_eq!(other.file_count, 3, "extensionless names must be Other");
+        assert_eq!(system.file_count, 1, "only the real .log file is System");
+        assert_eq!(system.total_size, 40);
     }
 
     /// An empty tree must return an empty result without panicking.

@@ -142,7 +142,10 @@ fn run_monitor(path: PathBuf, cancel: Arc<AtomicBool>, tx: Sender<MonitorMessage
     let filter =
         FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE;
 
-    let mut buffer = vec![0u8; 65536];
+    // 64 KiB buffer, u32-backed so the FILE_NOTIFY_INFORMATION records the
+    // kernel writes into it are 4-byte aligned (a Vec<u8> allocation does
+    // not guarantee alignment, and casting a misaligned pointer is UB).
+    let mut buffer = vec![0u32; 65536 / 4];
 
     'outer: loop {
         if cancel.load(Ordering::Relaxed) {
@@ -163,13 +166,11 @@ fn run_monitor(path: PathBuf, cancel: Arc<AtomicBool>, tx: Sender<MonitorMessage
         }
 
         // Issue asynchronous directory-change notification.
-        // ERROR_IO_PENDING is the expected "success" return for overlapped I/O;
-        // the Result from windows-rs is intentionally discarded here.
-        let _ = unsafe {
+        let issue = unsafe {
             ReadDirectoryChangesW(
                 dir_handle,
                 buffer.as_mut_ptr() as *mut core::ffi::c_void,
-                buffer.len() as u32,
+                (buffer.len() * 4) as u32,
                 true, // watch subdirectories recursively
                 filter,
                 None,
@@ -177,6 +178,19 @@ fn run_monitor(path: PathBuf, cancel: Arc<AtomicBool>, tx: Sender<MonitorMessage
                 None,
             )
         };
+        if let Err(e) = issue {
+            // ERROR_IO_PENDING just means the overlapped request was queued.
+            // Any other error is a synchronous failure: nothing was queued,
+            // the kernel holds no reference to OVERLAPPED, and waiting on the
+            // event would spin forever — exit and clean up instead.
+            if e.code() != windows::Win32::Foundation::ERROR_IO_PENDING.to_hresult() {
+                warn!(
+                    "Monitor: ReadDirectoryChangesW failed for {:?}: {}",
+                    path, e
+                );
+                break 'outer;
+            }
+        }
 
         // Poll for completion, checking the cancel flag every 200 ms.
         let mut bytes_transferred: u32 = 0;
@@ -249,25 +263,37 @@ fn run_monitor(path: PathBuf, cancel: Arc<AtomicBool>, tx: Sender<MonitorMessage
 
 /// Parse a contiguous `FILE_NOTIFY_INFORMATION` chain from `buffer` and send
 /// relevant events to `tx`.
+///
+/// `buffer` is u32-backed so its base address satisfies the 4-byte alignment
+/// `FILE_NOTIFY_INFORMATION` requires; the kernel guarantees every
+/// `NextEntryOffset` is DWORD-aligned (verified defensively below).
 fn parse_and_send_events(
-    buffer: &[u8],
+    buffer: &[u32],
     total_bytes: usize,
     base_path: &Path,
     tx: &Sender<MonitorMessage>,
 ) {
+    // SAFETY: reinterpreting u32s as bytes is always valid; the byte length
+    // covers the whole allocation.
+    let buffer: &[u8] =
+        unsafe { std::slice::from_raw_parts(buffer.as_ptr() as *const u8, buffer.len() * 4) };
+    let total_bytes = total_bytes.min(buffer.len());
     let mut offset = 0usize;
     let base = base_path.to_string_lossy();
     let base = base.trim_end_matches(['\\', '/']);
 
     loop {
-        // Bounds check before casting.
+        // Bounds + alignment check before casting. A misaligned offset would
+        // make the reference below UB, so stop parsing if the kernel ever
+        // violates the documented DWORD alignment of NextEntryOffset.
         let record_min = std::mem::size_of::<FILE_NOTIFY_INFORMATION>();
-        if offset + record_min > total_bytes {
+        if !offset.is_multiple_of(4) || offset + record_min > total_bytes {
             break;
         }
 
-        // SAFETY: `buffer` is a valid byte slice of at least `total_bytes` bytes
-        // filled by the kernel with correctly aligned FILE_NOTIFY_INFORMATION records.
+        // SAFETY: `buffer` is a valid byte slice of at least `total_bytes`
+        // bytes filled by the kernel; the base pointer is 4-byte aligned
+        // (u32-backed allocation) and `offset` is a multiple of 4.
         let fni = unsafe { &*(buffer.as_ptr().add(offset) as *const FILE_NOTIFY_INFORMATION) };
 
         // Extract the variable-length UTF-16 filename that follows the struct.

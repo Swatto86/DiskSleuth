@@ -23,8 +23,13 @@ pub fn toolbar(ui: &mut Ui, state: &mut AppState) {
             egui::Button::new("▶ Scan").min_size(egui::vec2(70.0, 28.0)),
         );
         if scan_btn.clicked() {
-            if let Some(idx) = state.selected_drive_index {
-                let path = state.drives[idx].path.clone();
+            // `.get()` rather than indexing: the drive list may have shrunk
+            // since the selection was made (drive unplugged + refreshed).
+            if let Some(path) = state
+                .selected_drive_index
+                .and_then(|idx| state.drives.get(idx))
+                .map(|d| d.path.clone())
+            {
                 state.start_scan(path);
             }
         }
@@ -51,7 +56,7 @@ pub fn toolbar(ui: &mut Ui, state: &mut AppState) {
             })
             .clicked()
         {
-            state.drives = disksleuth_core::platform::enumerate_drives();
+            state.refresh_drives();
         }
 
         ui.separator();
@@ -61,13 +66,13 @@ pub fn toolbar(ui: &mut Ui, state: &mut AppState) {
         if ui
             .add_enabled(can_export, egui::Button::new("📤 Export"))
             .on_hover_text(if can_export {
-                "Export results to CSV"
+                "Export results to a CSV file in your Documents folder"
             } else {
                 "Run a scan first to enable export"
             })
             .clicked()
         {
-            // TODO: implement CSV/JSON export.
+            state.export_csv();
         }
 
         // Right-aligned controls.

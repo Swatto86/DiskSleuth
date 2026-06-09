@@ -399,6 +399,18 @@ pub fn scan_mft(
         start.elapsed(),
     );
 
+    // No records at all means the enumeration failed outright (e.g. the
+    // first FSCTL_ENUM_USN_DATA call was rejected). Leave the shared tree
+    // untouched: the caller in `scanner::start_scan` falls back to the
+    // Tier-2 parallel walker whenever the tree is still empty.
+    if records.is_empty() {
+        tracing::warn!(
+            "MFT enumeration returned no records for {} — leaving tree empty for Tier-2 fallback",
+            vol_path
+        );
+        return;
+    }
+
     let _ = progress_tx.send(ScanProgress::Update {
         files_found,
         dirs_found,
@@ -509,6 +521,14 @@ fn build_tree_from_mft(
             continue;
         }
 
+        // The enumeration can yield more than one record for the same MFT
+        // reference (e.g. one per hard-link name). Keep the first only — a
+        // second arena node for the same reference would never be wired and
+        // would surface as a phantom zero-byte error entry.
+        if ref_to_idx.contains_key(&entry.file_ref) {
+            continue;
+        }
+
         let node = if entry.is_dir {
             // Clone is cheap: CompactString clones inline for short names.
             FileNode::new_dir(entry.file_name.clone(), None)
@@ -531,12 +551,26 @@ fn build_tree_from_mft(
             None => continue,
         };
 
-        let parent_idx = match ref_to_idx.get(&entry.parent_ref) {
+        // Each node is wired at most once. Duplicate records for the same
+        // reference (hard links) must not call `add_child` again: a second
+        // call corrupts `next_sibling` into a self-referencing list, which
+        // makes `children()` loop forever.
+        if tree.nodes[child_idx.idx()].parent.is_some() {
+            continue;
+        }
+
+        let mut parent_idx = match ref_to_idx.get(&entry.parent_ref) {
             Some(&idx) => idx,
             None => root_idx, // orphan → attach to root
         };
 
-        tree.nodes[child_idx.idx()].parent = Some(parent_idx);
+        // A corrupt record whose parent resolves to itself would otherwise
+        // create a self-cycle that hangs every tree traversal.
+        if parent_idx == child_idx {
+            parent_idx = root_idx;
+        }
+
+        // `add_child` also sets the child's parent pointer.
         tree.add_child(parent_idx, child_idx);
     }
 
@@ -581,7 +615,10 @@ fn build_tree_from_mft(
                     &rel_path
                 )
             };
-            match std::fs::metadata(&full_path) {
+            // symlink_metadata: report the link/reparse point itself rather
+            // than following it (consistent with the Tier-2 parallel walker,
+            // and avoids double-counting or stalling on remote targets).
+            match std::fs::symlink_metadata(&full_path) {
                 Ok(meta) => (i, meta.len(), meta.modified().ok(), false),
                 Err(_) => (i, 0u64, None, true),
             }

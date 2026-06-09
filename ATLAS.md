@@ -286,10 +286,13 @@ These invariants MUST hold at all times. Violations are bugs.
    produces the same result. It is safe to call during scanning (live) and again
    after completion (final).
 
-4. **Parent-child ordering:** Nodes are inserted into the arena parent-first.
-   The reverse-iteration aggregation pass (`i in (0..n).rev()`) depends on this
-   invariant. Inserting a child before its parent will produce wrong aggregated
-   sizes.
+4. **Parent-child ordering (optimisation, not a correctness requirement):**
+   The parallel walker inserts nodes into the arena parent-first, which lets
+   `aggregate_sizes` use a fast reverse-iteration pass. Trees built from MFT
+   records do NOT satisfy this ordering (NTFS reuses record numbers, so a
+   child's record can precede its parent's); `aggregate_sizes` detects the
+   violation in its O(n) reset pass and falls back to an order-independent
+   post-order traversal, so aggregated sizes are correct either way.
 
 5. **Bounded collections:** The following constants cap all growing collections.
    Raising them increases memory usage; do not delete them without a replacement:
@@ -349,7 +352,7 @@ release binary is a fully standalone `.exe`.
 |------|-------|---------|
 | Duplicate detection | `find_duplicates` is a Phase 2 stub — returns empty vec | Phase 2 |
 | Error persistence | Scan errors are in-memory only; not written to disk | Phase 3 |
-| Export | No CSV/JSON export from the UI (core has `csv` dep) | Phase 3 |
+| Export | CSV export ships (toolbar → Documents folder); JSON export and a save-location picker remain | Phase 3 |
 | Theme persistence | Dark/light preference resets on restart | Phase 3 |
 
 ---

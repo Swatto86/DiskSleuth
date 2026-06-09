@@ -322,6 +322,60 @@ fn start_monitor_twice_replaces_first() {
     state.stop_monitor();
 }
 
+// ── Drive refresh ──────────────────────────────────────────────────────────────
+
+/// After a drive refresh the selection must always be in bounds (or None) —
+/// a stale index would panic on the next `drives[idx]` access in the toolbar.
+#[test]
+fn refresh_drives_selection_stays_in_bounds() {
+    let mut state = AppState::new();
+    state.refresh_drives();
+    if let Some(idx) = state.selected_drive_index {
+        assert!(
+            idx < state.drives.len(),
+            "selected_drive_index {idx} out of bounds for {} drives",
+            state.drives.len()
+        );
+    }
+}
+
+/// A selection pointing past the end of the drive list (simulating a drive
+/// that vanished) must be repaired by refresh, not carried over.
+#[test]
+fn refresh_drives_repairs_stale_selection() {
+    let mut state = AppState::new();
+    state.selected_drive_index = Some(usize::MAX);
+    state.refresh_drives();
+    if let Some(idx) = state.selected_drive_index {
+        assert!(idx < state.drives.len());
+    }
+}
+
+// ── CSV export ─────────────────────────────────────────────────────────────────
+
+/// Exporting without a completed scan must set a failure status, not panic.
+#[test]
+fn export_csv_without_tree_sets_failure_status() {
+    let mut state = AppState::new();
+    state.export_csv();
+    let status = state.export_status.as_deref().unwrap_or_default();
+    assert!(
+        status.starts_with("Export failed"),
+        "expected failure status, got: {status}"
+    );
+}
+
+/// Starting a new scan clears any previous export status.
+#[test]
+fn start_scan_clears_export_status() {
+    let tmp = make_temp_tree();
+    let mut state = AppState::new();
+    state.export_status = Some("Exported 42 rows to X".into());
+    state.start_scan(tmp.path().to_path_buf());
+    assert!(state.export_status.is_none());
+    pump_until_done(&mut state);
+}
+
 // ── AppState construction ─────────────────────────────────────────────────────
 
 /// A freshly created `AppState` must start in the `Idle` phase.

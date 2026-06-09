@@ -124,7 +124,8 @@ pub struct AppState {
     pub show_errors: bool,
     pub show_about: bool,
     pub scan_errors: Vec<(String, String)>,
-    pub context_menu_node: Option<NodeIndex>,
+    /// Outcome of the most recent CSV export, shown in the status bar.
+    pub export_status: Option<String>,
     // ── Theme ──────────────────────────────────────────────
     /// `true` = dark mode (default), `false` = light mode.
     pub dark_mode: bool,
@@ -188,7 +189,7 @@ impl AppState {
             show_errors: false,
             show_about: false,
             scan_errors: Vec::new(),
-            context_menu_node: None,
+            export_status: None,
             dark_mode: true,
             file_type_stats: None,
             show_monitor_panel: false,
@@ -223,6 +224,7 @@ impl AppState {
         self.scan_is_mft = false;
         self.scan_is_elevated = false;
         self.scan_errors.clear();
+        self.export_status = None;
         self.tree = None;
         self.file_type_stats = None;
         self.visible_rows.clear();
@@ -242,6 +244,62 @@ impl AppState {
         if let Some(ref handle) = self.scan_handle {
             handle.cancel();
         }
+    }
+
+    /// Re-enumerate drives, keeping the selection on the same drive letter
+    /// when it still exists.
+    ///
+    /// The drive list can shrink (e.g. a USB stick was unplugged), so the
+    /// selection must never be carried over as a raw index — a stale index
+    /// would panic on the next `drives[idx]` access.
+    pub fn refresh_drives(&mut self) {
+        let previous_letter = self
+            .selected_drive_index
+            .and_then(|i| self.drives.get(i))
+            .map(|d| d.letter.clone());
+
+        self.drives = disksleuth_core::platform::enumerate_drives();
+
+        self.selected_drive_index = previous_letter
+            .and_then(|letter| self.drives.iter().position(|d| d.letter == letter))
+            .or(if self.drives.is_empty() {
+                None
+            } else {
+                Some(0)
+            });
+    }
+
+    /// Export the completed scan tree to a timestamped CSV file in the
+    /// user's Documents folder (falling back to the temp directory).
+    ///
+    /// The outcome is stored in [`export_status`](Self::export_status) for
+    /// the status bar to display.
+    pub fn export_csv(&mut self) {
+        let Some(ref tree) = self.tree else {
+            self.export_status = Some("Export failed: no completed scan to export".into());
+            return;
+        };
+
+        let dir = std::env::var_os("USERPROFILE")
+            .map(|p| std::path::PathBuf::from(p).join("Documents"))
+            .filter(|p| p.is_dir())
+            .unwrap_or_else(std::env::temp_dir);
+        let file_name = format!(
+            "DiskSleuth_{}.csv",
+            chrono::Local::now().format("%Y%m%d_%H%M%S")
+        );
+        let path = dir.join(file_name);
+
+        self.export_status = Some(
+            match disksleuth_core::analysis::export_tree_csv(tree, &path) {
+                Ok(rows) => format!(
+                    "Exported {} rows to {}",
+                    disksleuth_core::model::size::format_count(rows),
+                    path.display()
+                ),
+                Err(e) => format!("Export failed: {e}"),
+            },
+        );
     }
 
     /// Start the live write monitor on `path`.
@@ -279,11 +337,19 @@ impl AppState {
         };
 
         let mut repaint = false;
+        let mut disconnected = false;
         let mut messages_this_frame = 0usize;
         while messages_this_frame < MAX_MONITOR_MESSAGES_PER_FRAME {
             let msg = match handle.receiver.try_recv() {
                 Ok(m) => m,
-                Err(_) => break,
+                Err(crossbeam_channel::TryRecvError::Empty) => break,
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    // The monitor thread exited on its own (e.g. the watched
+                    // directory handle failed). Flag it so the UI stops
+                    // showing an active monitor that no longer exists.
+                    disconnected = true;
+                    break;
+                }
             };
             messages_this_frame += 1;
             repaint = true;
@@ -318,6 +384,12 @@ impl AppState {
                     }
                 }
             }
+        }
+
+        if disconnected {
+            self.monitor_handle = None;
+            self.monitor_active = false;
+            repaint = true;
         }
         repaint
     }
@@ -618,6 +690,9 @@ impl AppState {
 ///
 /// Free function to avoid `&mut self` / `&self.tree` borrow conflict.
 fn toggle_expand_inner(visible_rows: &mut Vec<VisibleRow>, row_index: usize, tree: &FileTree) {
+    if row_index >= visible_rows.len() {
+        return;
+    }
     let row = &visible_rows[row_index];
     let node = tree.node(row.node_index);
 
