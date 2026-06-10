@@ -5,7 +5,7 @@ use disksleuth_core::model::FileTree;
 use egui::Ui;
 
 /// Draw the details panel for the currently selected node.
-pub fn details_panel(ui: &mut Ui, state: &AppState) {
+pub fn details_panel(ui: &mut Ui, state: &mut AppState) {
     // Extract theme-adaptive colours once so the panel looks correct in both
     // dark and light mode.
     let color_muted = ui.visuals().weak_text_color();
@@ -25,140 +25,174 @@ pub fn details_panel(ui: &mut Ui, state: &AppState) {
         }
     };
 
-    // Obtain tree reference — final tree first, then live tree.
-    let live_guard;
-    let tree: &FileTree;
+    // Render inside a scoped block so the tree borrow (and any live-tree
+    // read guard) is released before the deferred delete request mutates
+    // state.
+    let delete_request = {
+        // Obtain tree reference — final tree first, then live tree.
+        let live_guard;
+        let tree: &FileTree;
 
-    if let Some(ref t) = state.tree {
-        tree = t;
-    } else if let Some(ref lt) = state.live_tree {
-        live_guard = lt.read();
-        tree = &*live_guard;
-    } else {
-        return;
-    };
-
-    // Guard against stale indices pointing beyond the current tree.
-    if selected.0 as usize >= tree.len() {
-        return;
-    }
-
-    let node = tree.node(selected);
-    let full_path = tree.full_path(selected);
-
-    ui.heading(
-        egui::RichText::new(if node.is_error {
-            "⚠"
-        } else if node.is_dir {
-            "📁"
+        if let Some(ref t) = state.tree {
+            tree = t;
+        } else if let Some(ref lt) = state.live_tree {
+            live_guard = lt.read();
+            tree = &*live_guard;
         } else {
-            "📄"
-        })
-        .size(16.0),
-    );
-    ui.add_space(2.0);
+            return;
+        };
 
-    // Error badge.
-    if node.is_error {
-        ui.label(
-            egui::RichText::new("Access denied — contents could not be read")
-                .size(11.0)
-                .color(color_warning)
-                .italics(),
+        // Guard against stale indices pointing beyond the current tree.
+        if selected.0 as usize >= tree.len() {
+            return;
+        }
+
+        let node = tree.node(selected);
+        let full_path = tree.full_path(selected);
+
+        ui.heading(
+            egui::RichText::new(if node.is_error {
+                "⚠"
+            } else if node.is_dir {
+                "📁"
+            } else {
+                "📄"
+            })
+            .size(16.0),
         );
         ui.add_space(2.0);
-    }
 
-    // Name.
-    ui.label(
-        egui::RichText::new(node.name.as_str())
-            .size(14.0)
-            .strong()
-            .color(color_normal),
-    );
-
-    ui.add_space(4.0);
-
-    // Path.
-    ui.label(
-        egui::RichText::new(&full_path)
-            .size(11.0)
-            .color(color_muted),
-    );
-
-    ui.add_space(8.0);
-    ui.separator();
-    ui.add_space(4.0);
-
-    // Stats grid.
-    egui::Grid::new("details_grid")
-        .num_columns(2)
-        .spacing([8.0, 4.0])
-        .show(ui, |ui| {
-            ui.label(egui::RichText::new("Size:").color(color_muted));
+        // Error badge.
+        if node.is_error {
             ui.label(
-                egui::RichText::new(format_size(node.size))
-                    .color(color_accent)
-                    .strong(),
+                egui::RichText::new("Access denied — contents could not be read")
+                    .size(11.0)
+                    .color(color_warning)
+                    .italics(),
             );
-            ui.end_row();
+            ui.add_space(2.0);
+        }
 
-            if node.size != node.allocated_size {
-                ui.label(egui::RichText::new("On disk:").color(color_muted));
-                ui.label(egui::RichText::new(format_size(node.allocated_size)).color(color_normal));
-                ui.end_row();
-            }
+        // Name.
+        ui.label(
+            egui::RichText::new(node.name.as_str())
+                .size(14.0)
+                .strong()
+                .color(color_normal),
+        );
 
-            ui.label(egui::RichText::new("% of parent:").color(color_muted));
-            ui.label(
-                egui::RichText::new(format!("{:.1}%", node.percent_of_parent)).color(color_normal),
-            );
-            ui.end_row();
+        ui.add_space(4.0);
 
-            if node.is_dir {
-                ui.label(egui::RichText::new("Files:").color(color_muted));
+        // Path.
+        ui.label(
+            egui::RichText::new(&full_path)
+                .size(11.0)
+                .color(color_muted),
+        );
+
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(4.0);
+
+        // Stats grid.
+        egui::Grid::new("details_grid")
+            .num_columns(2)
+            .spacing([8.0, 4.0])
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Size:").color(color_muted));
                 ui.label(
-                    egui::RichText::new(format_count(node.descendant_count)).color(color_normal),
+                    egui::RichText::new(format_size(node.size))
+                        .color(color_accent)
+                        .strong(),
                 );
                 ui.end_row();
-            }
 
-            if let Some(modified) = node.modified {
-                if let Ok(duration) = modified.elapsed() {
-                    let days = duration.as_secs() / 86400;
-                    let date_str = if days == 0 {
-                        "Today".to_string()
-                    } else if days == 1 {
-                        "Yesterday".to_string()
-                    } else if days < 365 {
-                        format!("{days} days ago")
-                    } else {
-                        format!("{:.1} years ago", days as f64 / 365.0)
-                    };
-                    ui.label(egui::RichText::new("Modified:").color(color_muted));
-                    ui.label(egui::RichText::new(date_str).color(color_normal));
+                if node.size != node.allocated_size {
+                    ui.label(egui::RichText::new("On disk:").color(color_muted));
+                    ui.label(
+                        egui::RichText::new(format_size(node.allocated_size)).color(color_normal),
+                    );
                     ui.end_row();
                 }
+
+                ui.label(egui::RichText::new("% of parent:").color(color_muted));
+                ui.label(
+                    egui::RichText::new(format!("{:.1}%", node.percent_of_parent))
+                        .color(color_normal),
+                );
+                ui.end_row();
+
+                if node.is_dir {
+                    ui.label(egui::RichText::new("Files:").color(color_muted));
+                    ui.label(
+                        egui::RichText::new(format_count(node.descendant_count))
+                            .color(color_normal),
+                    );
+                    ui.end_row();
+                }
+
+                if let Some(modified) = node.modified {
+                    if let Ok(duration) = modified.elapsed() {
+                        let days = duration.as_secs() / 86400;
+                        let date_str = if days == 0 {
+                            "Today".to_string()
+                        } else if days == 1 {
+                            "Yesterday".to_string()
+                        } else if days < 365 {
+                            format!("{days} days ago")
+                        } else {
+                            format!("{:.1} years ago", days as f64 / 365.0)
+                        };
+                        ui.label(egui::RichText::new("Modified:").color(color_muted));
+                        ui.label(egui::RichText::new(date_str).color(color_normal));
+                        ui.end_row();
+                    }
+                }
+            });
+
+        ui.add_space(8.0);
+
+        // Action buttons. Deletion is deferred until after the tree borrow ends.
+        let mut delete_request = None;
+        let is_root = node.parent.is_none();
+        let is_final_tree = state.tree.is_some();
+        ui.horizontal(|ui| {
+            if ui.button("📂 Open in Explorer").clicked() {
+                let target = if node.is_dir {
+                    full_path.clone()
+                } else {
+                    format!("/select,{}", full_path)
+                };
+                let _ = std::process::Command::new("explorer.exe")
+                    .arg(&target)
+                    .spawn();
+            }
+
+            if ui.button("📋 Copy Path").clicked() {
+                ui.ctx().copy_text(full_path.clone());
             }
         });
 
-    ui.add_space(8.0);
-
-    // Action buttons.
-    ui.horizontal(|ui| {
-        if ui.button("📂 Open in Explorer").clicked() {
-            let target = if node.is_dir {
-                full_path.clone()
-            } else {
-                format!("/select,{}", full_path)
-            };
-            let _ = std::process::Command::new("explorer.exe")
-                .arg(&target)
-                .spawn();
+        ui.add_space(4.0);
+        if ui
+            .add_enabled(
+                is_final_tree && !is_root,
+                egui::Button::new(
+                    egui::RichText::new("🗑 Delete (Recycle Bin)").color(color_warning),
+                ),
+            )
+            .on_hover_text("Move to the Recycle Bin (asks for confirmation)")
+            .on_disabled_hover_text(
+                "Available once the scan completes; scan roots cannot be deleted",
+            )
+            .clicked()
+        {
+            delete_request = Some(selected);
         }
+        delete_request
+    };
 
-        if ui.button("📋 Copy Path").clicked() {
-            ui.ctx().copy_text(full_path);
-        }
-    });
+    if let Some(target) = delete_request {
+        state.request_delete(target);
+    }
 }

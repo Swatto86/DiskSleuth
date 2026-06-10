@@ -145,15 +145,26 @@ pub fn status_bar(ui: &mut Ui, state: &AppState) {
                         );
                     }
 
-                    if let Some(ref status) = state.export_status {
+                    if let Some(ref flash) = state.status_flash {
                         ui.separator();
-                        let color = if status.starts_with("Export failed") {
+                        let color = if flash.is_error {
                             color_warning
                         } else {
                             color_success
                         };
-                        ui.label(egui::RichText::new(status).size(12.0).color(color));
+                        ui.label(egui::RichText::new(&flash.text).size(12.0).color(color));
                     }
+
+                    // Keyboard-navigation hint (discoverability).
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new(
+                                "↑↓/jk navigate · ←→/hl fold · Enter open · Del delete",
+                            )
+                            .size(11.0)
+                            .color(color_weak),
+                        );
+                    });
                 }
             }
         }

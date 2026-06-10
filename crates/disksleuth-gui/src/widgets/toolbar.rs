@@ -1,5 +1,5 @@
 /// Top action bar -- scan controls, theme toggle, monitor toggle, and branding.
-use crate::state::{AppPhase, AppState};
+use crate::state::{AppPhase, AppState, ExportFormat};
 use egui::Ui;
 
 /// Draw the toolbar.
@@ -44,6 +44,21 @@ pub fn toolbar(ui: &mut Ui, state: &mut AppState) {
             state.cancel_scan();
         }
 
+        // Scan a custom folder instead of a whole drive.
+        let can_pick = state.phase != AppPhase::Scanning;
+        if ui
+            .add_enabled(can_pick, egui::Button::new("📂 Scan Folder…"))
+            .on_hover_text("Pick a specific folder to scan instead of a whole drive")
+            .clicked()
+        {
+            if let Some(folder) = rfd::FileDialog::new()
+                .set_title("Choose a folder to scan")
+                .pick_folder()
+            {
+                state.start_scan(folder);
+            }
+        }
+
         // Refresh drives — disabled during a scan to prevent a jarring
         // state reset while results are being accumulated.
         let can_refresh = state.phase != AppPhase::Scanning;
@@ -61,18 +76,37 @@ pub fn toolbar(ui: &mut Ui, state: &mut AppState) {
 
         ui.separator();
 
-        // Export button (only when results available).
+        // Export menu (only when results available).
         let can_export = state.tree.is_some();
-        if ui
-            .add_enabled(can_export, egui::Button::new("📤 Export"))
+        let mut export_format: Option<ExportFormat> = None;
+        ui.add_enabled_ui(can_export, |ui| {
+            ui.menu_button("📤 Export", |ui| {
+                if ui
+                    .button("CSV — open in a spreadsheet")
+                    .on_hover_text("Write all rows to a CSV file in your Documents folder")
+                    .clicked()
+                {
+                    export_format = Some(ExportFormat::Csv);
+                    ui.close_menu();
+                }
+                if ui
+                    .button("JSON — structured data")
+                    .on_hover_text("Write all rows to a JSON file in your Documents folder")
+                    .clicked()
+                {
+                    export_format = Some(ExportFormat::Json);
+                    ui.close_menu();
+                }
+            })
+            .response
             .on_hover_text(if can_export {
-                "Export results to a CSV file in your Documents folder"
+                "Export results to your Documents folder"
             } else {
                 "Run a scan first to enable export"
-            })
-            .clicked()
-        {
-            state.export_csv();
+            });
+        });
+        if let Some(format) = export_format {
+            state.export(format);
         }
 
         // Right-aligned controls.

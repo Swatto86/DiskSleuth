@@ -15,46 +15,63 @@ pub fn scan_panel(ui: &mut Ui, state: &mut AppState) {
     ui.separator();
     ui.add_space(8.0);
 
-    // Analysis shortcuts (only when results available).
-    if state.tree.is_some() {
+    // Analysis shortcuts — each opens its floating window. Most need a
+    // completed scan; history only needs at least one recorded snapshot.
+    let have_tree = state.tree.is_some();
+    if have_tree || !state.scan_history.is_empty() {
         ui.heading("Analysis");
         ui.add_space(4.0);
+        let need_scan = "Run a scan first";
 
-        // "Top Largest Files" is live — selects the first result node.
         if ui
-            .selectable_label(false, "\u{1f4ca} Top 10 Largest Files")
-            .on_hover_text("Select the largest file found in the scan")
+            .add_enabled(
+                have_tree,
+                egui::SelectableLabel::new(state.show_largest_window, "\u{1f4ca} Largest Files"),
+            )
+            .on_hover_text("The biggest individual files found in the scan")
+            .on_disabled_hover_text(need_scan)
             .clicked()
         {
-            if let Some(ref tree) = state.tree {
-                if let Some(&idx) = tree.largest_files.first() {
-                    state.selected_node = Some(idx);
-                }
-            }
+            state.show_largest_window = !state.show_largest_window;
         }
 
         ui.add_space(2.0);
-
-        // Stub shortcuts — disabled until implemented; tooltip explains why.
-        let coming_soon = "Coming in a future release";
-        ui.add_enabled(
-            false,
-            egui::SelectableLabel::new(false, "\u{1f4c1} File Type Breakdown"),
-        )
-        .on_disabled_hover_text(coming_soon);
-
-        ui.add_space(2.0);
-        ui.add_enabled(
-            false,
-            egui::SelectableLabel::new(false, "\u{1f4c5} Old Files"),
-        )
-        .on_disabled_hover_text(coming_soon);
+        if ui
+            .add_enabled(
+                have_tree,
+                egui::SelectableLabel::new(state.show_old_files_window, "\u{1f4c5} Old Files"),
+            )
+            .on_hover_text("Large files that have not been modified in months or years")
+            .on_disabled_hover_text(need_scan)
+            .clicked()
+        {
+            state.show_old_files_window = !state.show_old_files_window;
+        }
 
         ui.add_space(2.0);
-        ui.add_enabled(
-            false,
-            egui::SelectableLabel::new(false, "\u{1f501} Duplicates"),
-        )
-        .on_disabled_hover_text(coming_soon);
+        if ui
+            .add_enabled(
+                have_tree,
+                egui::SelectableLabel::new(state.show_duplicates_window, "\u{1f501} Duplicates"),
+            )
+            .on_hover_text("Find files with identical content (hash-verified)")
+            .on_disabled_hover_text(need_scan)
+            .clicked()
+        {
+            state.show_duplicates_window = !state.show_duplicates_window;
+        }
+
+        ui.add_space(2.0);
+        if ui
+            .add_enabled(
+                !state.scan_history.is_empty(),
+                egui::SelectableLabel::new(state.show_history_window, "\u{1f552} Scan History"),
+            )
+            .on_hover_text("Compare completed scans to see which directories grew")
+            .on_disabled_hover_text("Complete a scan to start recording history")
+            .clicked()
+        {
+            state.show_history_window = !state.show_history_window;
+        }
     }
 }

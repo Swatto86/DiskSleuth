@@ -1,8 +1,7 @@
-/// Chart panel — visual breakdowns of disk usage.
-///
-/// Phase 2: will contain pie/donut chart of file type breakdown
-/// and optional treemap/sunburst visualisation.
+/// Chart panel — visual breakdowns of disk usage: a donut chart of the
+/// file-type split with a per-category bar legend underneath.
 use crate::state::{AppPhase, AppState};
+use crate::widgets::donut::{donut_chart, DonutSegment};
 use disksleuth_core::analysis::FileCategory;
 use disksleuth_core::model::size::format_size;
 use egui::{Rect, Ui, Vec2};
@@ -40,7 +39,23 @@ pub fn chart_panel(ui: &mut Ui, state: &AppState) {
     // Total size is only meaningful from the completed tree.
     let total_size = state.tree.as_ref().map_or(0u64, |t| t.total_size);
 
-    for stat in stats {
+    // Donut chart of the category split (hover a slice for details).
+    let segments: Vec<DonutSegment> = stats
+        .iter()
+        .map(|s| {
+            let cat = s.category.unwrap_or(FileCategory::Other);
+            DonutSegment {
+                label: cat.label(),
+                value: s.total_size,
+                color: category_color(cat),
+            }
+        })
+        .collect();
+    let diameter = ui.available_width().clamp(120.0, 200.0);
+    let hovered = donut_chart(ui, &segments, diameter);
+    ui.add_space(6.0);
+
+    for (i, stat) in stats.iter().enumerate() {
         let cat = stat.category.unwrap_or(FileCategory::Other);
         let pct = if total_size > 0 {
             (stat.total_size as f64 / total_size as f64 * 100.0) as f32
@@ -55,12 +70,13 @@ pub fn chart_panel(ui: &mut Ui, state: &AppState) {
             ui.painter_at(dot_rect)
                 .circle_filled(dot_rect.center(), 4.0, color);
 
-            // Label.
-            ui.label(
-                egui::RichText::new(cat.label())
-                    .color(color_normal)
-                    .size(12.0),
-            );
+            // Label — emphasised while its donut slice is hovered.
+            let label = egui::RichText::new(cat.label()).size(12.0);
+            ui.label(if hovered == Some(i) {
+                label.strong().color(color)
+            } else {
+                label.color(color_normal)
+            });
 
             // Size.
             ui.label(

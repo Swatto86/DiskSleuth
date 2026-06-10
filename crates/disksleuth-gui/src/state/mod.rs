@@ -1,20 +1,34 @@
-use disksleuth_core::analysis::{analyse_file_types, CategoryStats};
 /// Application state management.
 ///
-/// Centralises all mutable state that the UI reads and writes.
-/// The scan thread communicates via channels; state updates happen
-/// in `process_scan_messages()` which runs once per frame.
+/// Centralises all mutable state that the UI reads and writes. The scan
+/// thread communicates via channels; state updates happen in
+/// `process_scan_messages()` which runs once per frame.
 ///
 /// During scanning, the tree view reads from a **shared `LiveTree`**
 /// (`Arc<RwLock<FileTree>>`) so results appear in real time.
-use disksleuth_core::model::{FileTree, NodeIndex};
+///
+/// The `impl AppState` blocks are split by concern:
+/// - `mod.rs` — state struct, scan lifecycle, monitor, drives
+/// - `rows.rs` — visible-row building, expansion, sorting, selection
+/// - `treemap_nav.rs` — treemap navigation history
+/// - `actions.rs` — export, deletion, duplicate/old-file analysis, history
+mod actions;
+mod rows;
+mod treemap_nav;
+
+pub use actions::{DuplicateScan, ExportFormat, StatusFlash};
+
+use disksleuth_core::analysis::{
+    analyse_file_types, CategoryStats, DuplicateGroup, ScanSnapshot, StaleFile,
+};
+use disksleuth_core::model::{FileTree, NodeIndex, SortKey};
 use disksleuth_core::monitor::{MonitorHandle, WriteEvent};
 use disksleuth_core::platform::DriveInfo;
 use disksleuth_core::scanner::progress::ScanProgress;
 use disksleuth_core::scanner::{LiveTree, ScanHandle};
 use std::collections::VecDeque;
-
 use std::time::Duration;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppPhase {
     /// Idle — no scan in progress, possibly showing previous results.
@@ -45,7 +59,7 @@ const MAX_MESSAGES_PER_FRAME: usize = 300;
 /// Maximum entries in the treemap back/forward navigation history stacks.
 ///
 /// Prevents unbounded growth under rapid or scripted navigation.
-const MAX_NAV_HISTORY: usize = 50;
+pub(crate) const MAX_NAV_HISTORY: usize = 50;
 
 /// Maximum monitor messages drained per frame.
 ///
@@ -61,7 +75,7 @@ const MAX_MONITOR_MESSAGES_PER_FRAME: usize = 200;
 /// At 500 000 rows that is ~4 MB — acceptable — but prevents runaway
 /// growth on fully-expanded multi-million-node trees. Users can collapse
 /// nodes to explore deeper subtrees.
-const MAX_VISIBLE_ROWS: usize = 500_000;
+pub(crate) const MAX_VISIBLE_ROWS: usize = 500_000;
 
 /// Maximum number of per-file scan errors retained in `AppState::scan_errors`.
 ///
@@ -70,6 +84,9 @@ const MAX_VISIBLE_ROWS: usize = 500_000;
 /// 1 000 errors gives more than enough context to diagnose access-denied
 /// patterns without unbounded growth on heavily-restricted volumes.
 const MAX_SCAN_ERRORS: usize = 1_000;
+
+/// Maximum completed-scan snapshots retained for history comparison.
+pub(crate) const MAX_SCAN_HISTORY: usize = 16;
 
 /// All application state.
 pub struct AppState {
@@ -91,6 +108,8 @@ pub struct AppState {
     pub scan_dirs_found: u64,
     pub scan_total_size: u64,
     pub scan_current_path: String,
+    /// The path the current/last scan was started on (drive root or folder).
+    pub scan_root_path: String,
     pub scan_error_count: u64,
     pub scan_duration: Option<Duration>,
     /// True if the most recent scan was cancelled (partial results).
@@ -111,6 +130,14 @@ pub struct AppState {
     /// when to rebuild visible rows.
     live_tree_last_len: usize,
 
+    // ── Tree-view ordering & scrolling ─────────────────
+    /// Column the tree view is ordered by.
+    pub sort_key: SortKey,
+    pub sort_ascending: bool,
+    /// One-shot request for the tree view to scroll the selected row into
+    /// view (set by selection sync, keyboard navigation, and reveal).
+    pub scroll_to_selected: bool,
+
     // ── Treemap navigation ─────────────────────────────
     /// The directory currently shown as root of the treemap.
     pub treemap_root: Option<NodeIndex>,
@@ -120,22 +147,49 @@ pub struct AppState {
     pub treemap_forward: VecDeque<NodeIndex>,
 
     // ── UI state ───────────────────────────────────────
-    pub tree_scroll_offset: f32,
     pub show_errors: bool,
     pub show_about: bool,
     pub scan_errors: Vec<(String, String)>,
-    /// Outcome of the most recent CSV export, shown in the status bar.
-    pub export_status: Option<String>,
-    // ── Theme ──────────────────────────────────────────────
+    /// Outcome of the most recent export/delete action, shown in the status bar.
+    pub status_flash: Option<StatusFlash>,
     /// `true` = dark mode (default), `false` = light mode.
     pub dark_mode: bool,
 
-    // ── Pre-computed analysis cache ──────────────────────────
+    // ── Pre-computed analysis cache ────────────────────
     /// File-type breakdown — computed once after scan completes,
     /// not on every render frame.
     pub file_type_stats: Option<Vec<CategoryStats>>,
 
-    // ── Live write monitor ───────────────────────────────
+    // ── Analysis windows ───────────────────────────────
+    pub show_largest_window: bool,
+    pub show_old_files_window: bool,
+    /// Age threshold for the old-files window.
+    pub old_files_min_age_days: u64,
+    /// Cached stale-file results (invalidated on scan/delete/threshold change).
+    pub old_files: Option<Vec<StaleFile>>,
+    pub show_duplicates_window: bool,
+    /// Minimum file size considered by the duplicate finder.
+    pub duplicate_min_size: u64,
+    /// Completed duplicate-detection results.
+    pub duplicates: Option<Vec<DuplicateGroup>>,
+    /// In-flight background duplicate search, if any.
+    pub duplicate_scan: Option<DuplicateScan>,
+
+    // ── Scan history ───────────────────────────────────
+    /// Snapshots of completed (non-cancelled) scans, oldest first.
+    pub scan_history: Vec<ScanSnapshot>,
+    pub show_history_window: bool,
+    /// Snapshot indices chosen for comparison (baseline = older side).
+    pub history_baseline: Option<usize>,
+    pub history_compare: Option<usize>,
+    /// Cached diff keyed by the (baseline, compare) pair it was computed for.
+    pub history_diff: Option<((usize, usize), Vec<disksleuth_core::analysis::DirDelta>)>,
+
+    // ── Deletion ───────────────────────────────────────
+    /// Node awaiting user confirmation before Recycle Bin deletion.
+    pub pending_delete: Option<NodeIndex>,
+
+    // ── Live write monitor ─────────────────────────────
     /// Whether the monitor bottom panel is visible.
     pub show_monitor_panel: bool,
     /// Whether the monitor is actively watching.
@@ -172,6 +226,7 @@ impl AppState {
             scan_dirs_found: 0,
             scan_total_size: 0,
             scan_current_path: String::new(),
+            scan_root_path: String::new(),
             scan_error_count: 0,
             scan_duration: None,
             scan_was_cancelled: false,
@@ -182,16 +237,32 @@ impl AppState {
             visible_rows: Vec::new(),
             selected_node: None,
             live_tree_last_len: 0,
+            sort_key: SortKey::default(),
+            sort_ascending: false,
+            scroll_to_selected: false,
             treemap_root: None,
             treemap_back: VecDeque::new(),
             treemap_forward: VecDeque::new(),
-            tree_scroll_offset: 0.0,
             show_errors: false,
             show_about: false,
             scan_errors: Vec::new(),
-            export_status: None,
+            status_flash: None,
             dark_mode: true,
             file_type_stats: None,
+            show_largest_window: false,
+            show_old_files_window: false,
+            old_files_min_age_days: 365,
+            old_files: None,
+            show_duplicates_window: false,
+            duplicate_min_size: disksleuth_core::analysis::DEFAULT_MIN_DUPLICATE_SIZE,
+            duplicates: None,
+            duplicate_scan: None,
+            scan_history: Vec::new(),
+            show_history_window: false,
+            history_baseline: None,
+            history_compare: None,
+            history_diff: None,
+            pending_delete: None,
             show_monitor_panel: false,
             monitor_active: false,
             monitor_path: String::new(),
@@ -211,6 +282,7 @@ impl AppState {
         // Cancel any running scan so its thread stops cleanly.
         // This is safe to call even when no scan is in progress.
         self.cancel_scan();
+        self.cancel_duplicate_scan();
 
         // Reset scan state.
         self.phase = AppPhase::Scanning;
@@ -218,15 +290,19 @@ impl AppState {
         self.scan_dirs_found = 0;
         self.scan_total_size = 0;
         self.scan_current_path = path.to_string_lossy().into_owned();
+        self.scan_root_path = self.scan_current_path.clone();
         self.scan_error_count = 0;
         self.scan_duration = None;
         self.scan_was_cancelled = false;
         self.scan_is_mft = false;
         self.scan_is_elevated = false;
         self.scan_errors.clear();
-        self.export_status = None;
+        self.status_flash = None;
         self.tree = None;
         self.file_type_stats = None;
+        self.old_files = None;
+        self.duplicates = None;
+        self.pending_delete = None;
         self.visible_rows.clear();
         self.selected_node = None;
         self.live_tree_last_len = 0;
@@ -267,39 +343,6 @@ impl AppState {
             } else {
                 Some(0)
             });
-    }
-
-    /// Export the completed scan tree to a timestamped CSV file in the
-    /// user's Documents folder (falling back to the temp directory).
-    ///
-    /// The outcome is stored in [`export_status`](Self::export_status) for
-    /// the status bar to display.
-    pub fn export_csv(&mut self) {
-        let Some(ref tree) = self.tree else {
-            self.export_status = Some("Export failed: no completed scan to export".into());
-            return;
-        };
-
-        let dir = std::env::var_os("USERPROFILE")
-            .map(|p| std::path::PathBuf::from(p).join("Documents"))
-            .filter(|p| p.is_dir())
-            .unwrap_or_else(std::env::temp_dir);
-        let file_name = format!(
-            "DiskSleuth_{}.csv",
-            chrono::Local::now().format("%Y%m%d_%H%M%S")
-        );
-        let path = dir.join(file_name);
-
-        self.export_status = Some(
-            match disksleuth_core::analysis::export_tree_csv(tree, &path) {
-                Ok(rows) => format!(
-                    "Exported {} rows to {}",
-                    disksleuth_core::model::size::format_count(rows),
-                    path.display()
-                ),
-                Err(e) => format!("Export failed: {e}"),
-            },
-        );
     }
 
     /// Start the live write monitor on `path`.
@@ -421,7 +464,19 @@ impl AppState {
         while messages_this_frame < MAX_MESSAGES_PER_FRAME {
             let msg = match handle.progress_rx.try_recv() {
                 Ok(m) => m,
-                Err(_) => break,
+                Err(crossbeam_channel::TryRecvError::Empty) => break,
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                    // The scan thread died without sending Complete/Cancelled
+                    // (e.g. it panicked). Without this branch the UI would
+                    // stay in the Scanning phase forever. Salvage whatever
+                    // was scanned and surface the failure.
+                    self.scan_was_cancelled = true;
+                    self.status_flash = Some(StatusFlash::error(
+                        "Scan stopped unexpectedly — showing partial results",
+                    ));
+                    self.finalize_scan(false);
+                    return true;
+                }
             };
             messages_this_frame += 1;
             repaint = true;
@@ -456,41 +511,12 @@ impl AppState {
                 } => {
                     self.scan_error_count = error_count;
                     self.scan_duration = Some(duration);
-                    self.phase = AppPhase::Results;
-
-                    // Take ownership of the final tree from the LiveTree.
-                    if let Some(lt) = self.live_tree.take() {
-                        // Try to unwrap the Arc; if still shared, clone.
-                        let tree = parking_lot::RwLock::into_inner(
-                            std::sync::Arc::try_unwrap(lt)
-                                .unwrap_or_else(|arc| parking_lot::RwLock::new(arc.read().clone())),
-                        );
-                        self.build_initial_visible_rows(&tree);
-                        // Pre-compute analysis cache so chart panel never runs
-                        // analyse_file_types on the render thread.
-                        self.file_type_stats = Some(analyse_file_types(&tree));
-                        self.tree = Some(tree);
-                    }
-
-                    self.scan_handle = None;
+                    self.finalize_scan(true);
                     return true;
                 }
                 ScanProgress::Cancelled => {
                     self.scan_was_cancelled = true;
-                    self.phase = AppPhase::Results;
-
-                    // Preserve whatever has been scanned so far.
-                    if let Some(lt) = self.live_tree.take() {
-                        let tree = parking_lot::RwLock::into_inner(
-                            std::sync::Arc::try_unwrap(lt)
-                                .unwrap_or_else(|arc| parking_lot::RwLock::new(arc.read().clone())),
-                        );
-                        self.build_initial_visible_rows(&tree);
-                        self.file_type_stats = Some(analyse_file_types(&tree));
-                        self.tree = Some(tree);
-                    }
-
-                    self.scan_handle = None;
+                    self.finalize_scan(false);
                     return true;
                 }
             }
@@ -514,342 +540,35 @@ impl AppState {
         repaint
     }
 
-    /// Build the initial visible rows from the tree roots (post-scan).
+    /// Take ownership of the live tree and switch to the Results phase.
     ///
-    /// Expands root + its immediate children. Respects [`MAX_VISIBLE_ROWS`] so
-    /// drives with millions of direct root-level entries don't allocate an
-    /// unbounded Vec.
-    fn build_initial_visible_rows(&mut self, tree: &FileTree) {
-        self.visible_rows.clear();
+    /// Shared by the `Complete`, `Cancelled`, and disconnected-channel paths.
+    /// `completed == true` means the scanner finished normally: its final
+    /// aggregation pass already ran and the scan is recorded in the history.
+    /// Otherwise (cancel / scanner death) the tree is re-aggregated here, as
+    /// the scanner's interrupted exit paths skip the full aggregation pass.
+    fn finalize_scan(&mut self, completed: bool) {
+        self.phase = AppPhase::Results;
 
-        for &root_idx in &tree.roots {
-            if self.visible_rows.len() >= MAX_VISIBLE_ROWS {
-                break;
-            }
-            self.visible_rows.push(VisibleRow {
-                node_index: root_idx,
-                depth: 0,
-                is_expanded: true,
-            });
-
-            // Expand root's children by default.
-            let children = tree.children_sorted_by_size(root_idx);
-            for child_idx in children {
-                if self.visible_rows.len() >= MAX_VISIBLE_ROWS {
-                    break;
-                }
-                self.visible_rows.push(VisibleRow {
-                    node_index: child_idx,
-                    depth: 1,
-                    is_expanded: false,
-                });
-            }
-        }
-    }
-
-    /// Rebuild visible rows from the live tree during scanning.
-    ///
-    /// Preserves expansion state: any directory that was previously expanded
-    /// stays expanded. New directories at depth 0–1 are auto-expanded.
-    fn rebuild_live_visible_rows(&mut self, tree: &FileTree) {
-        // Remember which nodes were expanded.
-        //
-        // Pre-size the HashSet to the upper bound of expanded rows + roots
-        // so the initial inserts never trigger a rehash.  The lower bound is
-        // 8 so tiny trees (first few hundred nodes) also get a good allocation.
-        let approx_expanded = self
-            .visible_rows
-            .iter()
-            .filter(|r| r.is_expanded)
-            .count()
-            .max(8)
-            + tree.roots.len();
-        let mut expanded_set: std::collections::HashSet<NodeIndex> =
-            std::collections::HashSet::with_capacity(approx_expanded);
-        expanded_set.extend(
-            self.visible_rows
-                .iter()
-                .filter(|r| r.is_expanded)
-                .map(|r| r.node_index),
-        );
-
-        // Always expand roots.
-        for &root_idx in &tree.roots {
-            expanded_set.insert(root_idx);
-        }
-
-        self.visible_rows.clear();
-
-        for &root_idx in &tree.roots {
-            self.build_live_rows_recursive(tree, root_idx, 0, &expanded_set);
-        }
-    }
-
-    /// Iteratively build visible rows, respecting expanded state.
-    ///
-    /// Converted from recursion to an explicit stack to prevent call-stack
-    /// exhaustion on deeply nested directory trees (e.g. node_modules chains
-    /// hundreds of levels deep).  Stops inserting once [`MAX_VISIBLE_ROWS`]
-    /// is reached so the live tree view does not allocate unbounded memory
-    /// on fully-expanded deep trees.
-    fn build_live_rows_recursive(
-        &mut self,
-        tree: &FileTree,
-        node_idx: NodeIndex,
-        start_depth: u16,
-        expanded: &std::collections::HashSet<NodeIndex>,
-    ) {
-        // Explicit DFS stack: (node_index, depth).
-        // Children are pushed in reverse order so the first child is popped first,
-        // preserving the same top-to-bottom visual order as the old recursive version.
-        let mut stack: Vec<(NodeIndex, u16)> = Vec::with_capacity(64);
-        stack.push((node_idx, start_depth));
-
-        while let Some((current_idx, depth)) = stack.pop() {
-            // Hard cap: stop adding rows once the limit is reached.
-            if self.visible_rows.len() >= MAX_VISIBLE_ROWS {
-                return;
-            }
-
-            let is_expanded = expanded.contains(&current_idx) && tree.node(current_idx).is_dir;
-
-            self.visible_rows.push(VisibleRow {
-                node_index: current_idx,
-                depth,
-                is_expanded,
-            });
-
-            if is_expanded {
-                let children = tree.children_sorted_by_size(current_idx);
-                // Push in reverse so the first child is processed first (LIFO stack).
-                let next_depth = depth.saturating_add(1);
-                for child_idx in children.into_iter().rev() {
-                    stack.push((child_idx, next_depth));
-                }
-            }
-        }
-    }
-
-    /// Toggle expansion of a node at the given row index in visible_rows.
-    ///
-    /// Works with both the final results tree and the live tree during scanning.
-    pub fn toggle_expand(&mut self, row_index: usize) {
-        // Use disjoint field borrows to satisfy the borrow checker:
-        // tree/live_tree are borrowed immutably while visible_rows is borrowed mutably.
-        if let Some(ref tree) = self.tree {
-            toggle_expand_inner(&mut self.visible_rows, row_index, tree);
-        } else if let Some(ref lt) = self.live_tree {
-            let tree = lt.read();
-            toggle_expand_inner(&mut self.visible_rows, row_index, &tree);
-        }
-    }
-
-    /// Ensure a node is visible in the tree view by expanding all its ancestors.
-    /// This is called when the treemap selection changes to sync the tree view.
-    ///
-    /// Uses disjoint field borrows (no `FileTree` clone) by delegating work
-    /// to a free function that receives `&mut visible_rows` and `&FileTree`
-    /// separately — the same pattern used by `toggle_expand`.
-    pub fn reveal_node_in_tree(&mut self, target: NodeIndex) {
-        // Already visible? Just scroll to it.
-        if let Some(pos) = self
-            .visible_rows
-            .iter()
-            .position(|r| r.node_index == target)
-        {
-            let row_y = pos as f32 * 24.0;
-            if (row_y - self.tree_scroll_offset).abs() > 600.0 {
-                self.tree_scroll_offset = (row_y - 120.0).max(0.0);
-            }
-            return;
-        }
-
-        // Disjoint borrow: self.tree / self.live_tree (immutable) and
-        // self.visible_rows + self.tree_scroll_offset (mutable).  This avoids
-        // cloning a potentially million-node FileTree.
-        if let Some(ref tree) = self.tree {
-            reveal_node_inner(
-                &mut self.visible_rows,
-                &mut self.tree_scroll_offset,
-                target,
-                tree,
+        if let Some(lt) = self.live_tree.take() {
+            // Try to unwrap the Arc; if still shared, clone.
+            let mut tree = parking_lot::RwLock::into_inner(
+                std::sync::Arc::try_unwrap(lt)
+                    .unwrap_or_else(|arc| parking_lot::RwLock::new(arc.read().clone())),
             );
-        } else if let Some(ref lt) = self.live_tree {
-            let guard = lt.read();
-            reveal_node_inner(
-                &mut self.visible_rows,
-                &mut self.tree_scroll_offset,
-                target,
-                &guard,
-            );
-        }
-    }
-}
-
-/// Toggle-expand implementation operating on the visible_rows vec directly.
-///
-/// Free function to avoid `&mut self` / `&self.tree` borrow conflict.
-fn toggle_expand_inner(visible_rows: &mut Vec<VisibleRow>, row_index: usize, tree: &FileTree) {
-    if row_index >= visible_rows.len() {
-        return;
-    }
-    let row = &visible_rows[row_index];
-    let node = tree.node(row.node_index);
-
-    if !node.is_dir {
-        return; // files can't be expanded
-    }
-
-    if row.is_expanded {
-        // COLLAPSE: remove all descendants (rows with depth > this row's depth)
-        // that follow consecutively.
-        let parent_depth = row.depth;
-        let remove_start = row_index + 1;
-        let mut remove_end = remove_start;
-        while remove_end < visible_rows.len() && visible_rows[remove_end].depth > parent_depth {
-            remove_end += 1;
-        }
-        visible_rows.drain(remove_start..remove_end);
-        visible_rows[row_index].is_expanded = false;
-    } else {
-        // EXPAND: insert sorted children immediately after this row.
-        // Respect MAX_VISIBLE_ROWS: only add as many children as headroom allows.
-        let node_idx = row.node_index;
-        let child_depth = row.depth + 1;
-        let children = tree.children_sorted_by_size(node_idx);
-        let insert_pos = row_index + 1;
-        let headroom = MAX_VISIBLE_ROWS.saturating_sub(visible_rows.len());
-
-        let new_rows: Vec<VisibleRow> = children
-            .into_iter()
-            .take(headroom)
-            .map(|child_idx| VisibleRow {
-                node_index: child_idx,
-                depth: child_depth,
-                is_expanded: false,
-            })
-            .collect();
-
-        // Splice the children into the visible rows list.
-        visible_rows.splice(insert_pos..insert_pos, new_rows);
-        visible_rows[row_index].is_expanded = true;
-    }
-}
-
-/// Expand ancestors of `target` so it becomes visible, then scroll to it.
-///
-/// Free function to allow disjoint borrows (`&mut visible_rows` and
-/// `&mut scroll_offset` vs borrowing `AppState.tree` immutably).
-fn reveal_node_inner(
-    visible_rows: &mut Vec<VisibleRow>,
-    scroll_offset: &mut f32,
-    target: NodeIndex,
-    tree: &FileTree,
-) {
-    // Build ancestor chain from target up to root.
-    let mut ancestors: Vec<NodeIndex> = Vec::new();
-    let mut cursor = target;
-    while let Some(p) = tree.nodes[cursor.idx()].parent {
-        ancestors.push(p);
-        cursor = p;
-    }
-    ancestors.reverse(); // root → ... → direct parent
-
-    // Expand each ancestor in order so the target becomes reachable.
-    for ancestor in &ancestors {
-        if let Some(row_idx) = visible_rows.iter().position(|r| r.node_index == *ancestor) {
-            if !visible_rows[row_idx].is_expanded {
-                toggle_expand_inner(visible_rows, row_idx, tree);
+            if !completed {
+                tree.aggregate_sizes();
             }
-        }
-    }
-
-    // Scroll to the target row.
-    if let Some(pos) = visible_rows.iter().position(|r| r.node_index == target) {
-        let row_y = pos as f32 * 24.0;
-        *scroll_offset = (row_y - 120.0).max(0.0);
-    }
-}
-
-impl AppState {
-    /// Navigate the treemap into a directory, pushing current root onto back stack.
-    pub fn treemap_navigate_to(&mut self, node: NodeIndex) {
-        // Determine the current effective root (explicit or the tree's first root).
-        let current = self.treemap_root.or_else(|| {
-            self.tree
-                .as_ref()
-                .and_then(|t| t.roots.first().copied())
-                .or_else(|| {
-                    self.live_tree
-                        .as_ref()
-                        .and_then(|lt| lt.read().roots.first().copied())
-                })
-        });
-        if let Some(cur) = current {
-            if cur != node {
-                // Evict oldest entry when the history stack is at capacity.
-                if self.treemap_back.len() >= MAX_NAV_HISTORY {
-                    self.treemap_back.pop_front();
-                }
-                self.treemap_back.push_back(cur);
+            self.build_initial_visible_rows(&tree);
+            // Pre-compute analysis cache so chart panel never runs
+            // analyse_file_types on the render thread.
+            self.file_type_stats = Some(analyse_file_types(&tree));
+            if completed {
+                self.record_snapshot(&tree);
             }
+            self.tree = Some(tree);
         }
-        self.treemap_forward.clear();
-        self.treemap_root = Some(node);
-    }
 
-    /// Go back in treemap navigation history.
-    pub fn treemap_go_back(&mut self) {
-        if let Some(prev) = self.treemap_back.pop_back() {
-            if let Some(cur) = self.treemap_root {
-                if self.treemap_forward.len() >= MAX_NAV_HISTORY {
-                    self.treemap_forward.pop_front();
-                }
-                self.treemap_forward.push_back(cur);
-            }
-            self.treemap_root = Some(prev);
-        }
-    }
-
-    /// Go forward in treemap navigation history.
-    pub fn treemap_go_forward(&mut self) {
-        if let Some(next) = self.treemap_forward.pop_back() {
-            if let Some(cur) = self.treemap_root {
-                if self.treemap_back.len() >= MAX_NAV_HISTORY {
-                    self.treemap_back.pop_front();
-                }
-                self.treemap_back.push_back(cur);
-            }
-            self.treemap_root = Some(next);
-        }
-    }
-
-    /// Navigate treemap up to parent directory.
-    ///
-    /// Reads the parent index from the stored tree directly, eliminating
-    /// the need for an external `&FileTree` parameter (and the clone that
-    /// was previously required at the call site in `app.rs`).
-    pub fn treemap_go_up(&mut self) {
-        let parent_opt = match self.treemap_root {
-            None => return,
-            Some(root) => {
-                if let Some(ref tree) = self.tree {
-                    tree.nodes[root.idx()].parent
-                } else if let Some(ref lt) = self.live_tree {
-                    lt.read().nodes[root.idx()].parent
-                } else {
-                    None
-                }
-            }
-        };
-        if let Some(parent) = parent_opt {
-            let cur = self.treemap_root.unwrap();
-            if self.treemap_back.len() >= MAX_NAV_HISTORY {
-                self.treemap_back.pop_front();
-            }
-            self.treemap_back.push_back(cur);
-            self.treemap_forward.clear();
-            self.treemap_root = Some(parent);
-        }
+        self.scan_handle = None;
     }
 }

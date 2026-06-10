@@ -66,10 +66,20 @@ pub fn tree_view(ui: &mut Ui, state: &mut AppState) -> Response {
         ui.add_space(2.0);
     }
 
+    // One-shot scroll request from selection sync / keyboard navigation.
+    let scroll_to_row = if state.scroll_to_selected {
+        state.scroll_to_selected = false;
+        state
+            .selected_node
+            .and_then(|sel| state.visible_rows.iter().position(|r| r.node_index == sel))
+    } else {
+        None
+    };
+
     // ── Render the tree and collect deferred actions ────────────
     // Scoped block so that tree references (including any RwLockReadGuard)
     // are dropped before we mutate state.
-    let (toggle_row, new_selection) = {
+    let (toggle_row, new_selection, delete_request) = {
         // Obtain tree reference inside the block.
         let live_guard;
         let tree: &FileTree;
@@ -81,7 +91,7 @@ pub fn tree_view(ui: &mut Ui, state: &mut AppState) -> Response {
             tree = &*live_guard;
         }
 
-        render_tree_rows(ui, state, tree)
+        render_tree_rows(ui, state, tree, scroll_to_row)
     };
     // tree / live_guard dropped here — safe to mutate state.
 
@@ -94,17 +104,28 @@ pub fn tree_view(ui: &mut Ui, state: &mut AppState) -> Response {
     if let Some(row_idx) = toggle_row {
         state.toggle_expand(row_idx);
     }
+    if let Some(node_idx) = delete_request {
+        state.request_delete(node_idx);
+    }
 
     ui.interact(ui.max_rect(), ui.id().with("tree_bg"), Sense::hover())
 }
 
-/// Render the virtualised tree rows. Returns (toggle_row, new_selection)
-/// indices for deferred state mutation.
+/// Deferred actions collected during row rendering, applied by the caller
+/// once all tree borrows are released.
+type RowActions = (
+    Option<usize>,                             // toggle expansion of row
+    Option<usize>,                             // newly selected row
+    Option<disksleuth_core::model::NodeIndex>, // delete request
+);
+
+/// Render the virtualised tree rows.
 fn render_tree_rows(
     ui: &mut Ui,
     state: &AppState,
     tree: &FileTree,
-) -> (Option<usize>, Option<usize>) {
+    scroll_to_row: Option<usize>,
+) -> RowActions {
     // ── Extract theme-adaptive colours once ─────────────────────────────
     // Using visuals here avoids scattering dark/light conditionals across the
     // painter calls below.
@@ -139,6 +160,7 @@ fn render_tree_rows(
 
     let mut toggle_row: Option<usize> = None;
     let mut new_selection: Option<usize> = None;
+    let mut delete_request: Option<disksleuth_core::model::NodeIndex> = None;
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -151,6 +173,19 @@ fn render_tree_rows(
 
             let viewport = ui.clip_rect();
             let top_y = response.rect.top();
+
+            // Honour a pending scroll-to-selection request. The target rect
+            // is computed from row geometry, so it works even when the row
+            // lies far outside the currently rendered range.
+            if let Some(row_idx) = scroll_to_row {
+                let row_rect = Rect::from_min_size(
+                    egui::pos2(response.rect.left(), top_y + row_idx as f32 * ROW_HEIGHT),
+                    Vec2::new(response.rect.width(), ROW_HEIGHT),
+                );
+                if !viewport.contains_rect(row_rect) {
+                    ui.scroll_to_rect(row_rect, Some(egui::Align::Center));
+                }
+            }
 
             // Determine visible range.
             let first_visible = ((viewport.top() - top_y) / ROW_HEIGHT).floor().max(0.0) as usize;
@@ -204,7 +239,7 @@ fn render_tree_rows(
 
                 // Context menu.
                 row_response.context_menu(|ui| {
-                    context_menu(ui, state, row.node_index);
+                    context_menu(ui, state, row.node_index, &mut delete_request);
                 });
 
                 // Tooltip with full name when hovered (useful for truncated names).
@@ -384,11 +419,19 @@ fn render_tree_rows(
             response
         });
 
-    (toggle_row, new_selection)
+    (toggle_row, new_selection, delete_request)
 }
 
 /// Right-click context menu for a tree node.
-fn context_menu(ui: &mut Ui, state: &AppState, node_index: disksleuth_core::model::NodeIndex) {
+///
+/// Deletion is requested through `delete_request` (applied by the caller
+/// after tree borrows are released) and is only offered on completed scans.
+fn context_menu(
+    ui: &mut Ui,
+    state: &AppState,
+    node_index: disksleuth_core::model::NodeIndex,
+    delete_request: &mut Option<disksleuth_core::model::NodeIndex>,
+) {
     // Get tree reference — final tree first, then live tree.
     let live_guard;
     let tree: &FileTree;
@@ -421,6 +464,19 @@ fn context_menu(ui: &mut Ui, state: &AppState, node_index: disksleuth_core::mode
 
     if ui.button("📋 Copy Path").clicked() {
         ui.ctx().copy_text(full_path);
+        ui.close_menu();
+    }
+
+    // Deletion needs a completed scan (the live tree is still changing) and
+    // never applies to scan roots.
+    let can_delete = state.tree.is_some() && node.parent.is_some();
+    if ui
+        .add_enabled(can_delete, egui::Button::new("🗑 Delete (Recycle Bin)"))
+        .on_hover_text("Move to the Recycle Bin (asks for confirmation)")
+        .on_disabled_hover_text("Available once the scan completes; scan roots cannot be deleted")
+        .clicked()
+    {
+        *delete_request = Some(node_index);
         ui.close_menu();
     }
 

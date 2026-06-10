@@ -103,7 +103,7 @@ pub fn analyse_file_types(tree: &FileTree) -> Vec<CategoryStats> {
     let mut map: HashMap<FileCategory, CategoryStats> = HashMap::with_capacity(9);
 
     for node in &tree.nodes {
-        if node.is_dir {
+        if node.is_dir || node.is_deleted {
             continue;
         }
 

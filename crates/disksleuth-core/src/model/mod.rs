@@ -6,4 +6,4 @@ pub mod file_tree;
 pub mod size;
 
 pub use file_node::{FileNode, NodeIndex};
-pub use file_tree::FileTree;
+pub use file_tree::{FileTree, SortKey};

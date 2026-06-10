@@ -1,4 +1,5 @@
 /// UI widgets for DiskSleuth.
+pub mod donut;
 pub mod drive_picker;
 pub mod size_bar;
 pub mod status_bar;

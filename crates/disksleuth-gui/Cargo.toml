@@ -12,6 +12,7 @@ disksleuth-core = { path = "../disksleuth-core" }
 eframe.workspace = true
 egui.workspace = true
 egui_extras.workspace = true
+rfd.workspace = true
 crossbeam-channel.workspace = true
 parking_lot.workspace = true
 tracing.workspace = true

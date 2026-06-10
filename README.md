@@ -13,13 +13,20 @@ DiskSleuth scans your drives in parallel, displays results in an interactive tre
 - **Real-time progress** — tree view and treemap update live as the scan progresses via `Arc<RwLock<FileTree>>`
 - **Selection sync** — clicking an item in the tree highlights it in the treemap and vice versa
 - **Live write monitor** — optional bottom panel that watches the selected drive with `ReadDirectoryChangesW` and shows which files are being written to right now, with per-file hit counts
-- **CSV export** — one click writes the full scan (paths, sizes, types, timestamps) to a timestamped CSV in your Documents folder
+- **CSV / JSON export** — one click writes the full scan (paths, sizes, types, timestamps) to a timestamped CSV or JSON file in your Documents folder
 - **Auto-scan on startup** — begins scanning the OS drive (`%SystemDrive%`) immediately on launch
 - **Arena-allocated file tree** — `Vec<FileNode>` + `NodeIndex(u32)` for cache-friendly traversal and O(n) bottom-up aggregation
 - **Drive picker** — lists local drives (fixed, removable, optical) with usage bars, filesystem type, and capacity
-- **File type breakdown** — extension-based categorisation with proportional bars
-- **Top N largest files** — pre-computed during aggregation
-- **Right-click context menu** — Open in Explorer, Copy Path
+- **File type breakdown** — interactive donut chart plus proportional bars, by extension category
+- **Largest files window** — the top 100 biggest files, one click to locate each in the tree and treemap
+- **Old files window** — files untouched for 1 month – 2 years, sorted by reclaimable size
+- **Duplicate file detection** — size grouping → 4 KB prefix hash → full content hash, parallel and cancellable, grouped by wasted bytes
+- **Scan history & comparison** — every completed scan records a snapshot; diff two scans of the same path to see which directories grew or shrank
+- **Custom folder scan** — scan any folder via the native folder picker, not just whole drives
+- **Sortable columns** — click Name / Size / Files headers to re-order the tree (direction toggles)
+- **Keyboard navigation** — arrow keys or vim-style h/j/k/l, PgUp/PgDn, Home/End, Enter to drill in / open, Del to delete
+- **Recycle Bin deletion** — delete files or folders straight from the results (with confirmation); totals, charts, and treemap update in place
+- **Right-click context menu** — Open in Explorer, Copy Path, Delete (Recycle Bin)
 - **Dark / Light theme** toggle
 - **Cancellation** — stop a scan at any time; partial results stay visible
 - **Single portable executable** — no installer, no runtime dependencies
@@ -111,8 +118,8 @@ DiskSleuth/
 │   │   ├── src/
 │   │   │   ├── scanner/            # Parallel walker, MFT reader, progress channel
 │   │   │   ├── model/              # Arena file tree, node types, size formatting
-│   │   │   ├── analysis/           # Top files, file types, age, duplicates, CSV export
-│   │   │   ├── platform/           # Windows drive enumeration, admin detection
+│   │   │   ├── analysis/           # Top files, file types, age, duplicates, history, CSV/JSON export
+│   │   │   ├── platform/           # Windows drives, admin detection, Recycle Bin ops
 │   │   │   └── monitor/            # ReadDirectoryChangesW live write-event watcher
 │   │   └── tests/                  # End-to-end scanner tests (real tempdir scans)
 │   └── disksleuth-gui/             # egui desktop frontend
@@ -153,21 +160,27 @@ DiskSleuth/
 | `parking_lot` 0.12 | Fast reader-writer locks |
 | `chrono` 0.4 | Date/time for file age analysis, export timestamps |
 | `csv` 1.3 | CSV export writer |
+| `serde` / `serde_json` 1 | JSON export serialisation |
+| `rfd` 0.15 | Native folder picker for custom folder scans |
 | `tracing` 0.1 | Structured stderr logging (`DISKSLEUTH_LOG`) |
 
 ## Roadmap
 
+All planned features have shipped:
+
 - [x] Export scan results to CSV (toolbar → Documents folder)
 - [x] Live file-write monitor
-- [ ] Export scan results to JSON
-- [ ] Duplicate file detection (core stub exists)
-- [ ] Stale / old file panel (core age analysis exists; UI pending)
-- [ ] File type pie / donut chart
-- [ ] Keyboard navigation (arrow keys, vim-style)
-- [ ] Sort by column header click
-- [ ] Custom folder scan (not just whole drives)
-- [ ] Scan history & comparison
-- [ ] File deletion with recycle bin support
+- [x] Export scan results to JSON
+- [x] Duplicate file detection (size → prefix hash → full hash)
+- [x] Stale / old file panel
+- [x] File type pie / donut chart
+- [x] Keyboard navigation (arrow keys, vim-style)
+- [x] Sort by column header click
+- [x] Custom folder scan (not just whole drives)
+- [x] Scan history & comparison
+- [x] File deletion with recycle bin support
+
+Ideas for the future are tracked in [issues](https://github.com/Swatto86/DiskSleuth/issues).
 
 ## License
 

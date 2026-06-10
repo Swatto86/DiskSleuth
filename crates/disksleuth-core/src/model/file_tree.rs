@@ -5,6 +5,30 @@
 /// cache-friendly traversal and trivial serialisation.
 use super::file_node::{FileNode, NodeIndex};
 use compact_str::CompactString;
+use std::cmp::Ordering;
+
+/// Column a tree view can be ordered by.
+///
+/// Lives in the model (not the GUI) so any frontend can share the same
+/// child-ordering logic. Directories always sort before files regardless
+/// of the key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortKey {
+    /// Case-insensitive name.
+    Name,
+    /// Logical size (directories use their aggregated size).
+    #[default]
+    Size,
+    /// Descendant file count (0 for files).
+    Files,
+}
+
+/// Case-insensitive (ASCII) name comparison without per-call allocation.
+fn cmp_name_ci(a: &str, b: &str) -> Ordering {
+    a.bytes()
+        .map(|c| c.to_ascii_lowercase())
+        .cmp(b.bytes().map(|c| c.to_ascii_lowercase()))
+}
 
 /// The complete file tree produced by a scan.
 #[derive(Debug, Clone)]
@@ -111,7 +135,7 @@ impl FileTree {
                 node.size = 0;
                 node.allocated_size = 0;
                 node.descendant_count = 0;
-            } else {
+            } else if !node.is_deleted {
                 file_count += 1;
             }
             if let Some(parent_idx) = node.parent {
@@ -243,7 +267,7 @@ impl FileTree {
             .nodes
             .iter()
             .enumerate()
-            .filter(|(_, node)| !node.is_dir)
+            .filter(|(_, node)| !node.is_dir && !node.is_deleted)
             .map(|(i, _)| NodeIndex::new(i))
             .collect();
 
@@ -286,22 +310,104 @@ impl FileTree {
 
     /// Get direct children of a node as a collected Vec, sorted by size descending.
     pub fn children_sorted_by_size(&self, parent: NodeIndex) -> Vec<NodeIndex> {
-        let mut children = Vec::new();
-        let mut child = self.nodes[parent.idx()].first_child;
-        while let Some(idx) = child {
-            children.push(idx);
-            child = self.nodes[idx.idx()].next_sibling;
-        }
-        // Directories first, then by size descending.
+        self.children_sorted(parent, SortKey::Size, false)
+    }
+
+    /// Get direct children of a node ordered by `key`.
+    ///
+    /// Directories always precede files. Ties (and files under
+    /// [`SortKey::Files`]) fall back to case-insensitive name order so the
+    /// result is deterministic.
+    pub fn children_sorted(
+        &self,
+        parent: NodeIndex,
+        key: SortKey,
+        ascending: bool,
+    ) -> Vec<NodeIndex> {
+        let mut children = self.children(parent);
         children.sort_unstable_by(|a, b| {
             let a_node = &self.nodes[a.idx()];
             let b_node = &self.nodes[b.idx()];
+            let by_key = match key {
+                SortKey::Name => cmp_name_ci(&a_node.name, &b_node.name),
+                SortKey::Size => a_node.size.cmp(&b_node.size),
+                SortKey::Files => a_node.descendant_count.cmp(&b_node.descendant_count),
+            };
+            let directional = if ascending { by_key } else { by_key.reverse() };
             b_node
                 .is_dir
                 .cmp(&a_node.is_dir)
-                .then(b_node.size.cmp(&a_node.size))
+                .then(directional)
+                .then_with(|| cmp_name_ci(&a_node.name, &b_node.name))
         });
         children
+    }
+
+    /// Detach `target` and its whole subtree from the hierarchy.
+    ///
+    /// Used after the on-disk item was deleted (e.g. moved to the Recycle
+    /// Bin). Nodes are tombstoned in place — flagged [`FileNode::is_deleted`],
+    /// zero-sized, and fully unlinked — so existing `NodeIndex` values stay
+    /// in bounds. Call [`aggregate_sizes`](Self::aggregate_sizes) afterwards
+    /// to refresh totals, percentages, and the largest-files cache.
+    pub fn remove_subtree(&mut self, target: NodeIndex) {
+        let t = target.idx();
+        if t >= self.nodes.len() || self.nodes[t].is_deleted {
+            return;
+        }
+
+        // Unlink from the parent's child list (or the roots list).
+        match self.nodes[t].parent {
+            Some(parent) => {
+                let p = parent.idx();
+                if self.nodes[p].first_child == Some(target) {
+                    self.nodes[p].first_child = self.nodes[t].next_sibling;
+                } else {
+                    let mut cursor = self.nodes[p].first_child;
+                    while let Some(c) = cursor {
+                        let next = self.nodes[c.idx()].next_sibling;
+                        if next == Some(target) {
+                            self.nodes[c.idx()].next_sibling = self.nodes[t].next_sibling;
+                            break;
+                        }
+                        cursor = next;
+                    }
+                }
+            }
+            None => self.roots.retain(|&r| r != target),
+        }
+
+        // Tombstone the subtree: clear sizes and all links so aggregation,
+        // analysis, and rendering can never reach these nodes again.
+        let mut stack = vec![target];
+        while let Some(idx) = stack.pop() {
+            let i = idx.idx();
+            let mut child = self.nodes[i].first_child;
+            while let Some(c) = child {
+                stack.push(c);
+                child = self.nodes[c.idx()].next_sibling;
+            }
+            let node = &mut self.nodes[i];
+            node.is_deleted = true;
+            node.size = 0;
+            node.allocated_size = 0;
+            node.descendant_count = 0;
+            node.parent = None;
+            node.first_child = None;
+            node.next_sibling = None;
+        }
+    }
+
+    /// `true` if `ancestor` lies on the parent chain of `node` (or equals it).
+    pub fn is_in_subtree(&self, node: NodeIndex, ancestor: NodeIndex) -> bool {
+        let mut cursor = Some(node);
+        while let Some(idx) = cursor {
+            if idx == ancestor {
+                return true;
+            }
+            cursor = self.nodes[idx.idx()].parent;
+        }
+        false
     }
 
     /// Get direct children of a node (unsorted).
@@ -463,6 +569,122 @@ mod tests {
         tree.add_child(dir, file);
 
         assert_eq!(tree.full_path(file), "C:\\Users\\test.txt");
+    }
+
+    /// Build root -> [docs(dir, 2 files), zebra.txt(50), apple.txt(900)].
+    fn sortable_tree() -> (FileTree, NodeIndex) {
+        let mut tree = FileTree::with_capacity(8);
+        let root = tree.add_root(CompactString::new("C:"));
+        let dir = tree.add_node(FileNode::new_dir(CompactString::new("docs"), Some(root)));
+        tree.add_child(root, dir);
+        for (name, size) in [("inner1.txt", 10), ("inner2.txt", 20)] {
+            let f = tree.add_node(FileNode::new_file(
+                CompactString::new(name),
+                size,
+                Some(dir),
+            ));
+            tree.add_child(dir, f);
+        }
+        let zebra = tree.add_node(FileNode::new_file(
+            CompactString::new("zebra.txt"),
+            50,
+            Some(root),
+        ));
+        tree.add_child(root, zebra);
+        let apple = tree.add_node(FileNode::new_file(
+            CompactString::new("Apple.txt"),
+            900,
+            Some(root),
+        ));
+        tree.add_child(root, apple);
+        tree.aggregate_sizes();
+        (tree, root)
+    }
+
+    /// Name sort is case-insensitive and ascending; directories stay first.
+    #[test]
+    fn test_children_sorted_by_name() {
+        let (tree, root) = sortable_tree();
+        let by_name = tree.children_sorted(root, SortKey::Name, true);
+        let names: Vec<&str> = by_name
+            .iter()
+            .map(|&i| tree.node(i).name.as_str())
+            .collect();
+        assert_eq!(names, ["docs", "Apple.txt", "zebra.txt"]);
+
+        let by_name_desc = tree.children_sorted(root, SortKey::Name, false);
+        let names_desc: Vec<&str> = by_name_desc
+            .iter()
+            .map(|&i| tree.node(i).name.as_str())
+            .collect();
+        assert_eq!(names_desc, ["docs", "zebra.txt", "Apple.txt"]);
+    }
+
+    /// Size ascending puts the smallest file first (after directories).
+    #[test]
+    fn test_children_sorted_by_size_ascending() {
+        let (tree, root) = sortable_tree();
+        let asc = tree.children_sorted(root, SortKey::Size, true);
+        let names: Vec<&str> = asc.iter().map(|&i| tree.node(i).name.as_str()).collect();
+        assert_eq!(names, ["docs", "zebra.txt", "Apple.txt"]);
+    }
+
+    /// Removing a subtree updates totals, counts, and the largest-files cache.
+    #[test]
+    fn test_remove_subtree() {
+        let (mut tree, root) = sortable_tree();
+        let docs = tree.children(root)[0];
+        // children() returns insertion-reversed order; locate "docs" reliably.
+        let docs = if tree.node(docs).is_dir {
+            docs
+        } else {
+            *tree
+                .children(root)
+                .iter()
+                .find(|&&c| tree.node(c).is_dir)
+                .expect("docs dir must exist")
+        };
+
+        assert_eq!(tree.total_size, 980);
+        tree.remove_subtree(docs);
+        tree.aggregate_sizes();
+
+        assert_eq!(tree.total_size, 950, "docs subtree (30 B) must be gone");
+        assert_eq!(tree.file_count, 2, "two files remain");
+        assert_eq!(tree.node(root).descendant_count, 2);
+        assert!(tree.node(docs).is_deleted);
+        assert_eq!(tree.children(root).len(), 2, "docs unlinked from root");
+        assert!(
+            tree.largest_files.iter().all(|&i| !tree.node(i).is_deleted),
+            "largest_files must not reference deleted nodes"
+        );
+    }
+
+    /// Removing a root drops it from `roots` and zeroes the total.
+    #[test]
+    fn test_remove_subtree_root() {
+        let (mut tree, root) = sortable_tree();
+        tree.remove_subtree(root);
+        tree.aggregate_sizes();
+        assert!(tree.roots.is_empty());
+        assert_eq!(tree.total_size, 0);
+        assert_eq!(tree.file_count, 0);
+    }
+
+    /// `is_in_subtree` follows the parent chain and matches itself.
+    #[test]
+    fn test_is_in_subtree() {
+        let (tree, root) = sortable_tree();
+        let docs = *tree
+            .children(root)
+            .iter()
+            .find(|&&c| tree.node(c).is_dir)
+            .unwrap();
+        let inner = tree.children(docs)[0];
+        assert!(tree.is_in_subtree(inner, docs));
+        assert!(tree.is_in_subtree(inner, root));
+        assert!(tree.is_in_subtree(docs, docs));
+        assert!(!tree.is_in_subtree(root, docs));
     }
 
     #[test]

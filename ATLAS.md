@@ -20,8 +20,8 @@ dependencies.
 **Out of scope (current version):**
 - Cross-platform (Linux / macOS) support.
 - Network share scanning beyond what Windows enumerates as a local drive letter.
-- Hash-based duplicate detection (Phase 2 stub exists, not yet implemented).
 - CLI / TUI frontends (architecture is ready; only the GUI frontend is shipped).
+- Persistent on-disk scan history (snapshots are in-memory, per session).
 
 ---
 
@@ -40,6 +40,11 @@ dependencies.
 | **AppPhase** | `Idle | Scanning | Results` — the top-level state machine of the application. |
 | **Treemap** | Squarified layout of `FileNode` rectangles. Painter-based (no retained geometry). Click navigates into a directory. |
 | **Monitor** | Background `ReadDirectoryChangesW` watcher. Reports live write events as `WriteEvent` records with path, hit count, and last-seen timestamp. |
+| **SortKey** | Column the tree view is ordered by (`Name` / `Size` / `Files`). Lives in the model so all frontends share child-ordering logic; directories always sort before files. |
+| **Tombstone** | A `FileNode` whose `is_deleted` flag is set after a Recycle Bin deletion. It stays in the arena (so `NodeIndex` values never dangle) but is unlinked from the hierarchy and excluded from aggregation, analysis, and export. |
+| **DuplicateGroup** | Files with identical size *and* full-content hash (FNV-1a 128, after a 4 KB prefix-hash prefilter). Produced by `analysis::duplicates` on a background thread. |
+| **ScanSnapshot** | Compact summary of a completed scan: totals plus per-directory sizes to depth 3 (capped at 20 000 dirs). Two snapshots of the same root diff into `DirDelta`s for the history window. |
+| **StatusFlash** | Transient status-bar message (`text` + `is_error`) describing the outcome of the latest export/delete action. |
 
 ---
 
@@ -76,6 +81,8 @@ dependencies.
 1. `disksleuth-core` MUST NOT depend on `egui`, `eframe`, or any UI crate.
 2. `disksleuth-gui` MUST NOT contain business logic. It owns only presentation.
 3. All Win32 API calls live inside `disksleuth-core` (scanner, monitor, platform).
+   The GUI's only OS-facing dependency is `rfd` (native folder picker), which is
+   presentation-level by definition.
 4. Cross-cutting concerns (logging, config) do not leak into model or analysis modules.
 
 ---
@@ -109,11 +116,14 @@ DiskSleuth/
 │   │   │   │   ├── top_files.rs   Top-N largest files
 │   │   │   │   ├── file_types.rs  Extension categorisation + CategoryStats
 │   │   │   │   ├── age.rs         Stale-file finder
-│   │   │   │   └── duplicates.rs  Phase 2 stub (size+hash duplicate detection)
+│   │   │   │   ├── duplicates.rs  Size → 4 KB prefix hash → full-hash duplicate detection
+│   │   │   │   ├── history.rs     ScanSnapshot capture + snapshot comparison
+│   │   │   │   └── export.rs      CSV + JSON tree export
 │   │   │   ├── platform/
-│   │   │   │   ├── mod.rs         Re-exports enumerate_drives, is_elevated
+│   │   │   │   ├── mod.rs         Re-exports enumerate_drives, is_elevated, move_to_recycle_bin
 │   │   │   │   ├── drives.rs      GetLogicalDriveStringsW + DriveInfo
-│   │   │   │   └── permissions.rs GetTokenInformation elevation check
+│   │   │   │   ├── permissions.rs GetTokenInformation elevation check
+│   │   │   │   └── shell.rs       SHFileOperationW Recycle Bin deletion
 │   │   │   └── monitor/
 │   │   │       └── mod.rs         ReadDirectoryChangesW overlapped monitor
 │   │   └── tests/
@@ -122,23 +132,33 @@ DiskSleuth/
 │       ├── Cargo.toml
 │       ├── src/
 │       │   ├── lib.rs             Re-exports DiskSleuthApp, DiskSleuthState
-│       │   ├── app.rs             eframe::App + DiskSleuthState::build()
-│       │   ├── state.rs           AppState, AppPhase, VisibleRow
+│       │   ├── app.rs             eframe::App, keyboard navigation, DiskSleuthState::build()
+│       │   ├── state/
+│       │   │   ├── mod.rs         AppState struct, AppPhase, VisibleRow, scan lifecycle
+│       │   │   ├── rows.rs        Visible-row building, expansion, sorting, selection moves
+│       │   │   ├── treemap_nav.rs Treemap back/forward/up history
+│       │   │   └── actions.rs     Export, Recycle Bin delete, duplicates, old files, history
 │       │   ├── icon.rs            Application icon generation
 │       │   ├── panels/
 │       │   │   ├── mod.rs
-│       │   │   ├── scan_panel.rs  Left sidebar: drives, scan controls
-│       │   │   ├── tree_panel.rs  Centre: virtualised tree view
-│       │   │   ├── details_panel.rs  Right sidebar: selected item info
-│       │   │   ├── chart_panel.rs File type breakdown bars
-│       │   │   └── monitor_panel.rs  Live write-event table
+│       │   │   ├── scan_panel.rs  Left sidebar: drives, scan controls, analysis shortcuts
+│       │   │   ├── tree_panel.rs  Centre: sortable headers + virtualised tree view
+│       │   │   ├── details_panel.rs  Right sidebar: selected item info + delete
+│       │   │   ├── chart_panel.rs File type donut chart + breakdown bars
+│       │   │   ├── monitor_panel.rs  Live write-event table
+│       │   │   ├── largest_files_window.rs  Top-100 largest files window
+│       │   │   ├── old_files_window.rs      Stale-file window with age threshold
+│       │   │   ├── duplicates_window.rs     Duplicate finder window (background hash)
+│       │   │   ├── history_window.rs        Scan history + snapshot comparison
+│       │   │   └── delete_dialog.rs         Recycle Bin confirmation dialog
 │       │   └── widgets/
 │       │       ├── mod.rs
 │       │       ├── tree_view.rs   Painter-based virtualised TreeView
 │       │       ├── treemap.rs     Squarified treemap widget
 │       │       ├── drive_picker.rs  Drive selection with usage bars
+│       │       ├── donut.rs       Donut chart (tessellated annular quads)
 │       │       ├── size_bar.rs    Proportional size-bar widget
-│       │       ├── toolbar.rs     Top action bar
+│       │       ├── toolbar.rs     Top action bar (scan, folder picker, export menu)
 │       │       └── status_bar.rs  Bottom progress/stats bar
 │       └── tests/
 │           └── e2e_state.rs       E2E tests for AppState (no window needed)
@@ -169,10 +189,10 @@ DiskSleuth/
 | `scanner::mft` | `is_mft_available(&Path) -> bool`, `scan_mft(...)` |
 | `scanner::parallel` | `scan_parallel(...)` |
 | `scanner::progress` | `ScanProgress`, `ScanCommand` |
-| `model` | `FileTree`, `FileNode`, `NodeIndex` |
+| `model` | `FileTree`, `FileNode`, `NodeIndex`, `SortKey` (incl. `children_sorted`, `remove_subtree`, `is_in_subtree`) |
 | `model::size` | `format_size(u64) -> String`, `format_count(u64) -> String` |
-| `analysis` | `top_files`, `analyse_file_types`, `find_stale_files`, `find_duplicates` |
-| `platform` | `enumerate_drives() -> Vec<DriveInfo>`, `is_elevated() -> bool`, `DriveInfo`, `DriveType` |
+| `analysis` | `top_files`, `analyse_file_types`, `find_stale_files`, `collect_candidates` / `find_duplicates_among` / `find_duplicates`, `export_tree_csv` / `export_tree_json`, `ScanSnapshot` / `compare_snapshots` |
+| `platform` | `enumerate_drives() -> Vec<DriveInfo>`, `is_elevated() -> bool`, `move_to_recycle_bin(&Path)`, `DriveInfo`, `DriveType` |
 | `monitor` | `start_monitor(PathBuf) -> MonitorHandle`, `MonitorHandle`, `WriteEvent`, `MonitorMessage`, `MAX_MONITOR_ENTRIES` |
 
 ### Extension points
@@ -319,6 +339,22 @@ These invariants MUST hold at all times. Violations are bugs.
     scan thread sets its stop flag and the orphaned-thread scenario is
     impossible even if future code paths call `start_scan` while scanning.
 
+12. **Tombstones are terminal:** once `FileTree::remove_subtree` flags a node
+    `is_deleted`, the node is unlinked (parent/children/sibling cleared, size
+    zeroed) and every consumer — aggregation, largest-files, file types, age,
+    duplicates, export, snapshots — must skip it. `NodeIndex` values pointing
+    at tombstones remain in-bounds, so stale references can never panic; the
+    GUI additionally clears selection/nav references after a deletion.
+
+13. **One duplicate search in flight:** `AppState::start_duplicate_scan`
+    cancels any previous search first. Results are delivered through a
+    bounded(1) channel; a disconnected channel (worker panic) clears the
+    handle so the progress bar can never spin forever.
+
+14. **Bounded analysis collections:** `MAX_SCAN_HISTORY = 16` snapshots,
+    `MAX_SNAPSHOT_DIRS = 20_000` directories per snapshot (BFS, shallowest
+    first), `MAX_OLD_FILES = 200` stale-file results.
+
 8. **Log level default is INFO:** `DISKSLEUTH_LOG` absent = INFO. Debug/trace
    level must never be active in release builds by default. Secrets and PII
    must never be logged at any level.
@@ -350,10 +386,10 @@ release binary is a fully standalone `.exe`.
 
 | Area | Issue | Tracking |
 |------|-------|---------|
-| Duplicate detection | `find_duplicates` is a Phase 2 stub — returns empty vec | Phase 2 |
 | Error persistence | Scan errors are in-memory only; not written to disk | Phase 3 |
-| Export | CSV export ships (toolbar → Documents folder); JSON export and a save-location picker remain | Phase 3 |
+| Export | Exports always target the Documents folder; a save-location picker remains | Phase 3 |
 | Theme persistence | Dark/light preference resets on restart | Phase 3 |
+| History persistence | Scan snapshots are in-memory only; lost on exit | Phase 3 |
 
 ---
 
@@ -527,5 +563,5 @@ live-scan updates (which fire every few seconds on an active scan).
 
 ---
 
-*Last updated: 2026-03-01 — added Segoe UI Emoji (`seguiemj.ttf`) as a font fallback in `app.rs` so all emoji glyphs render correctly (§7 updated). Removed non-existent `PROGRESS.md` and `assets/fonts/` from repo structure (§4 corrected).*
+*Last updated: 2026-06-10 — v1.1.0: completed the entire roadmap. New: JSON export, real duplicate detection (size → prefix hash → full FNV-1a-128 hash, parallel + cancellable), old-files window, file-type donut chart, keyboard navigation (arrows + vim h/j/k/l), sortable tree columns (`SortKey` in the model), custom folder scan (`rfd` picker), in-memory scan history with snapshot comparison, and Recycle Bin deletion (`platform::shell` + tree tombstoning). GUI `state.rs` split into a `state/` module by concern. Fixed: scanner-thread death no longer leaves the UI stuck in Scanning (disconnected-channel handling), cancelled scans now get a final aggregation pass, and treemap→tree selection sync now actually scrolls the tree view. §§1, 2, 3, 4, 5, 8, 10 updated.*
 

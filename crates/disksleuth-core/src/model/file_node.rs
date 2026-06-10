@@ -75,6 +75,12 @@ pub struct FileNode {
     /// `true` if this node could not be read (e.g. access denied).
     /// The node stays in the tree so users can see where errors occurred.
     pub is_error: bool,
+
+    /// `true` if this node was removed after the scan (e.g. deleted to the
+    /// Recycle Bin). Tombstoned nodes stay in the arena so existing
+    /// `NodeIndex` values never dangle, but they are unlinked from the
+    /// hierarchy and excluded from aggregation, analysis, and export.
+    pub is_deleted: bool,
 }
 
 impl FileNode {
@@ -92,6 +98,7 @@ impl FileNode {
             modified: None,
             percent_of_parent: 0.0,
             is_error: false,
+            is_deleted: false,
         }
     }
 
@@ -109,6 +116,7 @@ impl FileNode {
             modified: None,
             percent_of_parent: 0.0,
             is_error: false,
+            is_deleted: false,
         }
     }
 
@@ -126,6 +134,7 @@ impl FileNode {
             modified: None,
             percent_of_parent: 0.0,
             is_error: true,
+            is_deleted: false,
         }
     }
 }

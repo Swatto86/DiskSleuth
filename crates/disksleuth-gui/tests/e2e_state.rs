@@ -11,7 +11,8 @@
 ///   - Error accumulation and `MAX_SCAN_ERRORS` cap
 ///
 /// The real `parallel::scan_parallel` scanner is used so no mocking is needed.
-use disksleuth_gui::state::{AppPhase, AppState};
+use disksleuth_core::model::SortKey;
+use disksleuth_gui::state::{AppPhase, AppState, ExportFormat};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -351,29 +352,318 @@ fn refresh_drives_repairs_stale_selection() {
     }
 }
 
-// ── CSV export ─────────────────────────────────────────────────────────────────
+// ── Export ─────────────────────────────────────────────────────────────────────
 
 /// Exporting without a completed scan must set a failure status, not panic.
 #[test]
-fn export_csv_without_tree_sets_failure_status() {
+fn export_without_tree_sets_failure_status() {
     let mut state = AppState::new();
-    state.export_csv();
-    let status = state.export_status.as_deref().unwrap_or_default();
-    assert!(
-        status.starts_with("Export failed"),
-        "expected failure status, got: {status}"
+    for format in [ExportFormat::Csv, ExportFormat::Json] {
+        state.status_flash = None;
+        state.export(format);
+        let flash = state.status_flash.as_ref().expect("flash must be set");
+        assert!(flash.is_error, "expected failure status for {format:?}");
+        assert!(
+            flash.text.starts_with("Export failed"),
+            "unexpected status text: {}",
+            flash.text
+        );
+    }
+}
+
+/// Starting a new scan clears any previous status flash.
+#[test]
+fn start_scan_clears_status_flash() {
+    let tmp = make_temp_tree();
+    let mut state = AppState::new();
+    state.status_flash = Some(disksleuth_gui::state::StatusFlash::info("Exported 42 rows"));
+    state.start_scan(tmp.path().to_path_buf());
+    assert!(state.status_flash.is_none());
+    pump_until_done(&mut state);
+}
+
+// ── Sorting ────────────────────────────────────────────────────────────────────
+
+/// Clicking a different sort column reorders the visible rows; clicking the
+/// same column flips the direction.
+#[test]
+fn set_sort_reorders_visible_rows() {
+    let tmp = make_temp_tree();
+    let mut state = AppState::new();
+    state.start_scan(tmp.path().to_path_buf());
+    pump_until_done(&mut state);
+
+    let names_at_depth_1 = |state: &AppState| -> Vec<String> {
+        let tree = state.current_tree().expect("tree");
+        state
+            .visible_rows
+            .iter()
+            .filter(|r| r.depth == 1)
+            .map(|r| tree.node(r.node_index).name.to_string())
+            .collect()
+    };
+
+    state.set_sort(SortKey::Name);
+    assert_eq!(state.sort_key, SortKey::Name);
+    assert!(state.sort_ascending, "name sorts ascending by default");
+    let by_name = names_at_depth_1(&state);
+    // dirs first ("sub"), then files alphabetically.
+    assert_eq!(by_name, ["sub", "a.txt", "b.bin"]);
+
+    // Same column again → direction flips.
+    state.set_sort(SortKey::Name);
+    assert!(!state.sort_ascending);
+    let by_name_desc = names_at_depth_1(&state);
+    assert_eq!(by_name_desc, ["sub", "b.bin", "a.txt"]);
+
+    // Size descending is the startup default ordering.
+    state.set_sort(SortKey::Size);
+    assert!(!state.sort_ascending, "size sorts descending by default");
+    let by_size = names_at_depth_1(&state);
+    assert_eq!(by_size, ["sub", "b.bin", "a.txt"]);
+}
+
+/// Re-sorting keeps directories expanded.
+#[test]
+fn set_sort_preserves_expansion() {
+    let tmp = make_temp_tree();
+    let mut state = AppState::new();
+    state.start_scan(tmp.path().to_path_buf());
+    pump_until_done(&mut state);
+
+    // Expand "sub" (find its collapsed row).
+    let sub_row = state
+        .visible_rows
+        .iter()
+        .position(|r| {
+            state
+                .current_tree()
+                .map(|t| t.node(r.node_index).is_dir && r.depth == 1)
+                .unwrap_or(false)
+        })
+        .expect("sub dir row");
+    state.toggle_expand(sub_row);
+    let rows_expanded = state.visible_rows.len();
+
+    state.set_sort(SortKey::Name);
+    assert_eq!(
+        state.visible_rows.len(),
+        rows_expanded,
+        "expanded rows must survive a resort"
     );
 }
 
-/// Starting a new scan clears any previous export status.
+// ── Keyboard navigation ────────────────────────────────────────────────────────
+
+/// Down/up selection moves through visible rows and requests a scroll.
 #[test]
-fn start_scan_clears_export_status() {
+fn move_selection_walks_rows() {
     let tmp = make_temp_tree();
     let mut state = AppState::new();
-    state.export_status = Some("Exported 42 rows to X".into());
     state.start_scan(tmp.path().to_path_buf());
-    assert!(state.export_status.is_none());
     pump_until_done(&mut state);
+    assert!(state.visible_rows.len() >= 3);
+
+    // No selection: down selects the first row.
+    state.move_selection(1);
+    assert_eq!(state.selected_node, Some(state.visible_rows[0].node_index));
+    assert!(state.scroll_to_selected);
+
+    state.scroll_to_selected = false;
+    state.move_selection(1);
+    assert_eq!(state.selected_node, Some(state.visible_rows[1].node_index));
+
+    // Clamped at the top.
+    state.move_selection(-10);
+    assert_eq!(state.selected_node, Some(state.visible_rows[0].node_index));
+
+    // Clamped at the bottom.
+    state.move_selection(isize::MAX / 2);
+    assert_eq!(
+        state.selected_node,
+        Some(state.visible_rows.last().unwrap().node_index)
+    );
+}
+
+/// Right expands a collapsed directory; left collapses it again; left on a
+/// collapsed child jumps to the parent.
+#[test]
+fn expand_collapse_selection() {
+    let tmp = make_temp_tree();
+    let mut state = AppState::new();
+    state.start_scan(tmp.path().to_path_buf());
+    pump_until_done(&mut state);
+
+    // Select the "sub" directory row (depth 1, is_dir).
+    let sub_row = state
+        .visible_rows
+        .iter()
+        .position(|r| {
+            r.depth == 1
+                && state
+                    .current_tree()
+                    .map(|t| t.node(r.node_index).is_dir)
+                    .unwrap_or(false)
+        })
+        .expect("sub dir row");
+    let sub_node = state.visible_rows[sub_row].node_index;
+    state.selected_node = Some(sub_node);
+
+    let before = state.visible_rows.len();
+    state.expand_selection();
+    assert!(state.visible_rows[sub_row].is_expanded);
+    assert!(state.visible_rows.len() > before, "children must appear");
+
+    // Expanded + right → steps into the first child.
+    state.expand_selection();
+    let child = state.visible_rows[sub_row + 1].node_index;
+    assert_eq!(state.selected_node, Some(child));
+
+    // Left on a file/collapsed node → jumps to parent.
+    state.collapse_selection();
+    assert_eq!(state.selected_node, Some(sub_node));
+
+    // Left on the expanded dir → collapses it.
+    state.collapse_selection();
+    assert!(!state.visible_rows[sub_row].is_expanded);
+    assert_eq!(state.visible_rows.len(), before);
+}
+
+// ── Old files & duplicates ─────────────────────────────────────────────────────
+
+/// Freshly written files are not stale at a 1-year threshold.
+#[test]
+fn old_files_cache_refreshes() {
+    let tmp = make_temp_tree();
+    let mut state = AppState::new();
+    state.start_scan(tmp.path().to_path_buf());
+    pump_until_done(&mut state);
+
+    state.refresh_old_files();
+    let old = state.old_files.as_deref().expect("cache must be set");
+    assert!(old.is_empty(), "new files cannot be a year old");
+}
+
+/// The duplicate background scan finds the duplicate pair in the temp tree
+/// and clears its in-flight handle on completion.
+#[test]
+fn duplicate_scan_finds_pairs() {
+    let tmp = TempDir::new().unwrap();
+    let payload = vec![0x5Au8; 4096];
+    std::fs::write(tmp.path().join("copy_one.bin"), &payload).unwrap();
+    std::fs::write(tmp.path().join("copy_two.bin"), &payload).unwrap();
+    write_bytes(&tmp.path().join("unique.bin"), 100);
+
+    let mut state = AppState::new();
+    state.start_scan(tmp.path().to_path_buf());
+    pump_until_done(&mut state);
+
+    state.duplicate_min_size = 1;
+    state.start_duplicate_scan();
+    assert!(state.duplicate_scan.is_some());
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while state.duplicate_scan.is_some() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "duplicate scan timed out"
+        );
+        state.process_duplicate_messages();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let groups = state.duplicates.as_deref().expect("results must be set");
+    assert_eq!(groups.len(), 1, "exactly one duplicate group");
+    assert_eq!(groups[0].files.len(), 2);
+    assert_eq!(groups[0].size, 4096);
+}
+
+// ── Scan history ───────────────────────────────────────────────────────────────
+
+/// Completed scans are recorded; two scans of the same path produce a
+/// comparable default pair.
+#[test]
+fn history_records_completed_scans() {
+    let tmp = make_temp_tree();
+    let mut state = AppState::new();
+
+    state.start_scan(tmp.path().to_path_buf());
+    pump_until_done(&mut state);
+    assert_eq!(state.scan_history.len(), 1);
+    assert!(
+        state.history_pair().is_none(),
+        "one snapshot cannot compare"
+    );
+
+    // Grow the tree, scan again.
+    write_bytes(&tmp.path().join("grown.bin"), 10_000);
+    state.start_scan(tmp.path().to_path_buf());
+    pump_until_done(&mut state);
+    assert_eq!(state.scan_history.len(), 2);
+
+    let (a, b) = state.history_pair().expect("default pair");
+    assert_eq!((a, b), (0, 1));
+    assert!(
+        state.scan_history[b].total_size > state.scan_history[a].total_size,
+        "second snapshot must include the new file"
+    );
+
+    state.refresh_history_diff();
+    assert!(state.history_diff.is_some());
+}
+
+// ── Deletion (state update without filesystem I/O) ─────────────────────────────
+
+/// Purging a node updates totals, caches, visible rows, and clears stale
+/// references — without touching the filesystem.
+#[test]
+fn purge_node_updates_results() {
+    let tmp = make_temp_tree();
+    let mut state = AppState::new();
+    state.start_scan(tmp.path().to_path_buf());
+    pump_until_done(&mut state);
+
+    let tree = state.current_tree().expect("tree");
+    let total_before = tree.total_size;
+    let root = tree.roots[0];
+    let victim = *tree
+        .children(root)
+        .iter()
+        .find(|&&c| !tree.node(c).is_dir)
+        .expect("a file child");
+    let victim_size = tree.node(victim).size;
+    state.selected_node = Some(victim);
+    state.treemap_root = Some(victim);
+
+    state.purge_node_from_results(victim);
+
+    let tree = state.current_tree().expect("tree");
+    assert_eq!(tree.total_size, total_before - victim_size);
+    assert!(tree.node(victim).is_deleted);
+    assert_eq!(state.selected_node, None, "stale selection must be cleared");
+    assert_eq!(
+        state.treemap_root,
+        Some(root),
+        "treemap must re-root to the deleted node's parent"
+    );
+    assert!(
+        state.visible_rows.iter().all(|r| r.node_index != victim),
+        "purged node must leave the visible rows"
+    );
+}
+
+/// Requesting deletion of a scan root is rejected with an error flash.
+#[test]
+fn request_delete_rejects_root() {
+    let tmp = make_temp_tree();
+    let mut state = AppState::new();
+    state.start_scan(tmp.path().to_path_buf());
+    pump_until_done(&mut state);
+
+    let root = state.current_tree().unwrap().roots[0];
+    state.request_delete(root);
+    assert!(state.pending_delete.is_none());
+    assert!(state.status_flash.as_ref().is_some_and(|f| f.is_error));
 }
 
 // ── AppState construction ─────────────────────────────────────────────────────

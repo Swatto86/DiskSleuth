@@ -32,7 +32,7 @@ pub fn find_stale_files(tree: &FileTree, min_age_days: u64, max_results: usize) 
         .iter()
         .enumerate()
         .filter_map(|(i, node)| {
-            if node.is_dir {
+            if node.is_dir || node.is_deleted {
                 return None;
             }
             let modified = node.modified?;

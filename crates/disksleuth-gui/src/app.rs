@@ -134,6 +134,83 @@ impl DiskSleuthApp {
             last_dark_mode: None,
         }
     }
+
+    /// Global keyboard navigation for the tree view.
+    ///
+    /// Arrow keys move/fold the selection; vim keys (h/j/k/l) mirror them.
+    /// Enter drills into the selected directory (treemap) or opens the file
+    /// in Explorer; Delete asks to recycle the selection. Skipped whenever a
+    /// widget owns the keyboard (e.g. a text field) or the delete dialog is
+    /// open (it handles Enter/Escape itself).
+    fn handle_keyboard(&mut self, ctx: &egui::Context) {
+        if ctx.wants_keyboard_input() || self.state.pending_delete.is_some() {
+            return;
+        }
+        use egui::Key;
+        let pressed = |k: Key| ctx.input(|i| i.key_pressed(k));
+
+        if pressed(Key::ArrowDown) || pressed(Key::J) {
+            self.state.move_selection(1);
+        }
+        if pressed(Key::ArrowUp) || pressed(Key::K) {
+            self.state.move_selection(-1);
+        }
+        if pressed(Key::PageDown) {
+            self.state.move_selection(20);
+        }
+        if pressed(Key::PageUp) {
+            self.state.move_selection(-20);
+        }
+        if pressed(Key::Home) {
+            self.state.move_selection(isize::MIN / 2);
+        }
+        if pressed(Key::End) {
+            self.state.move_selection(isize::MAX / 2);
+        }
+        if pressed(Key::ArrowRight) || pressed(Key::L) {
+            self.state.expand_selection();
+        }
+        if pressed(Key::ArrowLeft) || pressed(Key::H) {
+            self.state.collapse_selection();
+        }
+        if pressed(Key::Enter) {
+            self.activate_selection();
+        }
+        if pressed(Key::Delete) {
+            if let Some(selected) = self.state.selected_node {
+                self.state.request_delete(selected);
+            }
+        }
+    }
+
+    /// Enter on a selection: drill the treemap into a directory, or reveal
+    /// a file in Explorer.
+    fn activate_selection(&mut self) {
+        let Some(selected) = self.state.selected_node else {
+            return;
+        };
+        let target = {
+            let Some(ref tree) = self.state.tree else {
+                return;
+            };
+            if selected.idx() >= tree.len() {
+                return;
+            }
+            if tree.node(selected).is_dir {
+                None
+            } else {
+                Some(tree.full_path(selected))
+            }
+        };
+        match target {
+            None => self.state.treemap_navigate_to(selected),
+            Some(path) => {
+                let _ = std::process::Command::new("explorer.exe")
+                    .arg(format!("/select,{}", path))
+                    .spawn();
+            }
+        }
+    }
 }
 
 impl eframe::App for DiskSleuthApp {
@@ -166,13 +243,18 @@ impl eframe::App for DiskSleuthApp {
         // ── Process background messages ───────────────────────────────────
         let _data_changed = self.state.process_scan_messages();
         let _monitor_changed = self.state.process_monitor_messages();
+        let _duplicates_changed = self.state.process_duplicate_messages();
 
-        // Request continuous repaint while scanning or monitoring.
-        let needs_repaint =
-            self.state.phase == crate::state::AppPhase::Scanning || self.state.monitor_active;
+        // Request continuous repaint while background work is running.
+        let needs_repaint = self.state.phase == crate::state::AppPhase::Scanning
+            || self.state.monitor_active
+            || self.state.duplicate_scan.is_some();
         if needs_repaint {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
+
+        // ── Keyboard navigation ───────────────────────────────────────────
+        self.handle_keyboard(ctx);
 
         // ── Top toolbar ───────────────────────────────────────────────────
         egui::TopBottomPanel::top("toolbar")
@@ -308,13 +390,20 @@ impl eframe::App for DiskSleuthApp {
             .resizable(true)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    panels::details_panel::details_panel(ui, &self.state);
+                    panels::details_panel::details_panel(ui, &mut self.state);
                     ui.add_space(16.0);
                     ui.separator();
                     ui.add_space(8.0);
                     panels::chart_panel::chart_panel(ui, &self.state);
                 });
             });
+
+        // ── Floating analysis windows & dialogs ──────────────────────────
+        panels::largest_files_window::largest_files_window(ctx, &mut self.state);
+        panels::old_files_window::old_files_window(ctx, &mut self.state);
+        panels::duplicates_window::duplicates_window(ctx, &mut self.state);
+        panels::history_window::history_window(ctx, &mut self.state);
+        panels::delete_dialog::delete_dialog(ctx, &mut self.state);
 
         // ── Central panel (Treemap) ───────────────────────────────────────
         egui::CentralPanel::default().show(ctx, |ui| {
