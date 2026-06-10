@@ -339,7 +339,7 @@ These invariants MUST hold at all times. Violations are bugs.
 | Dependency | Minimum version | Why |
 |------------|-----------------|-----|
 | Windows 10 (x86_64) | Build 19041 | Win32 `ReadDirectoryChangesW` overlapped I/O, `FSCTL_ENUM_USN_DATA` |
-| Rust toolchain (build only) | 1.75 (2021 edition) | `is_multiple_of` on integers, workspace deps |
+| Rust toolchain (build only) | 1.87 (2021 edition) | `is_multiple_of` on integers (stable since 1.87), workspace deps |
 
 No runtime-installable dependencies (no .NET, no VC++ redistributables). The
 release binary is a fully standalone `.exe`.

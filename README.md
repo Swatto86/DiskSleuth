@@ -7,17 +7,18 @@ DiskSleuth scans your drives in parallel, displays results in an interactive tre
 ## Features
 
 - **Parallel scanning** — uses [jwalk](https://crates.io/crates/jwalk) + rayon to walk the filesystem across all available cores
-- **NTFS MFT fast-scan** — optional direct MFT reader (`FSCTL_ENUM_USN_DATA`) for near-instant enumeration on NTFS volumes (requires admin)
+- **NTFS MFT fast-scan** — optional direct MFT reader (`FSCTL_ENUM_USN_DATA`) for near-instant enumeration on NTFS volumes (requires admin; falls back to the parallel walker automatically)
 - **SpaceSniffer-style treemap** — nested squarified layout with directory headers, click-to-navigate, back/forward/up, and breadcrumb trail
 - **Virtualised tree view** — renders only visible rows for smooth scrolling with millions of files; proper font-metric text clipping with ellipsis
 - **Real-time progress** — tree view and treemap update live as the scan progresses via `Arc<RwLock<FileTree>>`
 - **Selection sync** — clicking an item in the tree highlights it in the treemap and vice versa
+- **Live write monitor** — optional bottom panel that watches the selected drive with `ReadDirectoryChangesW` and shows which files are being written to right now, with per-file hit counts
+- **CSV export** — one click writes the full scan (paths, sizes, types, timestamps) to a timestamped CSV in your Documents folder
 - **Auto-scan on startup** — begins scanning the OS drive (`%SystemDrive%`) immediately on launch
 - **Arena-allocated file tree** — `Vec<FileNode>` + `NodeIndex(u32)` for cache-friendly traversal and O(n) bottom-up aggregation
-- **Drive picker** — lists all mounted volumes with usage bars, filesystem type, and capacity
+- **Drive picker** — lists local drives (fixed, removable, optical) with usage bars, filesystem type, and capacity
 - **File type breakdown** — extension-based categorisation with proportional bars
 - **Top N largest files** — pre-computed during aggregation
-- **Stale file finder** — identifies files by age threshold
 - **Right-click context menu** — Open in Explorer, Copy Path
 - **Dark / Light theme** toggle
 - **Cancellation** — stop a scan at any time; partial results stay visible
@@ -29,34 +30,50 @@ DiskSleuth scans your drives in parallel, displays results in an interactive tre
 
 ## Getting Started
 
+### Download
+
+Grab the latest `DiskSleuth.exe` from the
+[Releases page](https://github.com/Swatto86/DiskSleuth/releases/latest) — a
+single portable executable, no installer needed. Run it as administrator to
+enable the MFT fast-scan tier.
+
 ### Requirements
 
 - **Windows 10+** (x86_64)
-- **Rust 1.75+** (2021 edition) — for building from source
+- **Rust 1.87+** (2021 edition) — for building from source
 
 ### Build & Run
 
 ```powershell
 git clone https://github.com/Swatto86/DiskSleuth.git
-cd disksleuth
+cd DiskSleuth
 
 # Release build (recommended — LTO, stripped, optimised)
 cargo build --release
 
 # Run
-.\target\release\disksleuth.exe
+.\target\release\DiskSleuth.exe
 
 # Or build + run in one step
 cargo run --release
 ```
 
-The release binary is at `target\release\disksleuth.exe` — a single portable `.exe`, no installer needed.
+The release binary is at `target\release\DiskSleuth.exe`.
 
 ### Run Tests
 
 ```powershell
 cargo test --workspace
 ```
+
+### CI & Releases
+
+Every push and pull request runs the quality gates on Windows
+(`cargo fmt -- --check`, `cargo clippy -- -D warnings`,
+`cargo test --workspace`). Releases are built and published by GitHub Actions
+— either by pushing a `vX.Y.Z` tag (see `update-application.ps1`, which bumps
+the version, tags, and pushes in one step) or by manually dispatching the
+**Release** workflow with a version and release notes.
 
 ### Debug / Verbose Logging
 
@@ -68,11 +85,11 @@ DiskSleuth logs to **stderr** using
 ```powershell
 # Verbose debug output (function flow, state transitions, OS interactions)
 $env:DISKSLEUTH_LOG = "debug"
-.\target\release\disksleuth.exe
+.\target\release\DiskSleuth.exe
 
 # Full trace output (very noisy — includes every event)
 $env:DISKSLEUTH_LOG = "trace"
-.\target\release\disksleuth.exe
+.\target\release\DiskSleuth.exe
 
 # Reset to default (info) for the current session
 Remove-Item Env:\DISKSLEUTH_LOG
@@ -87,23 +104,27 @@ tokens, and PII are never logged at any level.
 ## Architecture
 
 ```
-disksleuth/
+DiskSleuth/
 ├── src/main.rs                     # Thin binary entry point
 ├── crates/
 │   ├── disksleuth-core/            # Pure logic — scanning, model, analysis (zero UI deps)
-│   │   └── src/
-│   │       ├── scanner/            # Parallel walker, MFT reader, progress channel
-│   │       ├── model/              # Arena file tree, node types, size formatting
-│   │       ├── analysis/           # Top files, file types, age analysis, duplicates
-│   │       ├── platform/           # Windows drive enumeration, admin detection
-│   │       └── monitor/            # ReadDirectoryChangesW live write-event watcher
+│   │   ├── src/
+│   │   │   ├── scanner/            # Parallel walker, MFT reader, progress channel
+│   │   │   ├── model/              # Arena file tree, node types, size formatting
+│   │   │   ├── analysis/           # Top files, file types, age, duplicates, CSV export
+│   │   │   ├── platform/           # Windows drive enumeration, admin detection
+│   │   │   └── monitor/            # ReadDirectoryChangesW live write-event watcher
+│   │   └── tests/                  # End-to-end scanner tests (real tempdir scans)
 │   └── disksleuth-gui/             # egui desktop frontend
-│       └── src/
-│           ├── app.rs              # eframe::App + font setup (Segoe UI + Segoe UI Emoji)
-│           ├── state.rs            # UI state, navigation history, tree expansion
-│           ├── icon.rs             # Application icon generation
-│           ├── widgets/            # TreeView, Treemap, DrivePicker, Toolbar, StatusBar
-│           └── panels/             # Scan, Tree, Details, Chart, Monitor panels
+│       ├── src/
+│       │   ├── app.rs              # eframe::App + font setup (Segoe UI + Segoe UI Emoji)
+│       │   ├── state.rs            # UI state, navigation history, tree expansion, export
+│       │   ├── icon.rs             # Application icon generation
+│       │   ├── widgets/            # TreeView, Treemap, DrivePicker, Toolbar, StatusBar
+│       │   └── panels/             # Scan, Tree, Details, Chart, Monitor panels
+│       └── tests/                  # End-to-end AppState tests
+├── .github/workflows/              # CI quality gates + tag-triggered release build
+├── update-application.ps1          # One-step release script (bump, tag, push)
 ├── build.rs                        # Windows manifest + icon embedding
 └── assets/                         # icon.ico (generated by build.rs)
 ```
@@ -130,13 +151,17 @@ disksleuth/
 | `compact_str` 0.8 | Small-string optimisation for file names |
 | `windows` 0.58 | Win32 API (drives, filesystem, MFT) |
 | `parking_lot` 0.12 | Fast reader-writer locks |
-| `chrono` 0.4 | Date/time for file age analysis |
+| `chrono` 0.4 | Date/time for file age analysis, export timestamps |
+| `csv` 1.3 | CSV export writer |
+| `tracing` 0.1 | Structured stderr logging (`DISKSLEUTH_LOG`) |
 
 ## Roadmap
 
 - [x] Export scan results to CSV (toolbar → Documents folder)
+- [x] Live file-write monitor
 - [ ] Export scan results to JSON
-- [ ] Duplicate file detection
+- [ ] Duplicate file detection (core stub exists)
+- [ ] Stale / old file panel (core age analysis exists; UI pending)
 - [ ] File type pie / donut chart
 - [ ] Keyboard navigation (arrow keys, vim-style)
 - [ ] Sort by column header click
