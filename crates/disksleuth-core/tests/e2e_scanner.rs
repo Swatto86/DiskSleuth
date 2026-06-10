@@ -82,6 +82,44 @@ fn drain_to_completion(handle: disksleuth_core::scanner::ScanHandle) -> Duration
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+/// Regression test: paths reconstructed from a FOLDER scan must be absolute
+/// and resolve to the real on-disk files.
+///
+/// The root node carries the full scan path; if it carried only the folder's
+/// leaf name, every `full_path()` would be relative — silently breaking
+/// Explorer integration, exports, Recycle Bin deletion, and duplicate
+/// hashing for custom folder scans (drive-root scans masked the bug because
+/// `C:` happens to anchor an absolute path).
+#[test]
+fn folder_scan_full_paths_are_absolute_and_openable() {
+    let tmp = TempDir::new().expect("failed to create temp dir");
+    build_test_tree(tmp.path());
+
+    let handle = start_scan(tmp.path().to_path_buf());
+    let tree_ref = handle.live_tree.clone();
+    drain_to_completion(handle);
+
+    let tree = tree_ref.read();
+    let mut files_checked = 0;
+    for i in 0..tree.len() {
+        let node = &tree.nodes[i];
+        if node.is_dir || node.is_error {
+            continue;
+        }
+        let path = tree.full_path(disksleuth_core::model::NodeIndex::new(i));
+        assert!(
+            Path::new(&path).is_absolute(),
+            "reconstructed path must be absolute, got: {path}"
+        );
+        assert!(
+            fs::File::open(&path).is_ok(),
+            "reconstructed path must open on disk: {path}"
+        );
+        files_checked += 1;
+    }
+    assert!(files_checked >= 4, "expected to verify at least 4 files");
+}
+
 /// The scanner must visit all files and report a non-zero total size.
 #[test]
 fn scan_discovers_all_files() {

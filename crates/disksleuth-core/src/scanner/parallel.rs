@@ -378,12 +378,15 @@ fn ensure_ancestors(
     parent_idx
 }
 
-/// Derive a display name for the scan root.
+/// Derive the root node's name for the scan root.
+///
+/// The root node carries the FULL scan path (`C:` for a drive root,
+/// `C:\Users\X\Projects` for a folder scan) — never just the folder's leaf
+/// name. `FileTree::full_path` rebuilds paths by joining node names from the
+/// root down, so a leaf-name root would make every reconstructed path
+/// relative, breaking Explorer integration, exports, deletion, and duplicate
+/// hashing for custom folder scans. The trailing backslash is trimmed so
+/// joining with `\` yields exactly one separator.
 fn root_display_name(path: &Path) -> String {
-    if let Some(name) = path.file_name() {
-        name.to_string_lossy().to_string()
-    } else {
-        let s = path.to_string_lossy();
-        s.trim_end_matches('\\').to_string()
-    }
+    path.to_string_lossy().trim_end_matches('\\').to_string()
 }
