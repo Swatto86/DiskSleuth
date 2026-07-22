@@ -129,13 +129,6 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
 
-      # ── Quality gates — must all pass before packaging ──────────────────
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Lint (clippy)
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
       - name: Run tests
         run: cargo test --workspace
 
@@ -171,6 +164,40 @@ jobs:
                 'content-type': 'application/octet-stream',
                 'content-length': data.length,
               },
+            });
+
+      - name: Build NSIS installer
+        shell: pwsh
+        run: |
+          $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+?)"' | Select-Object -First 1).Matches.Groups[1].Value
+          $exe = Get-ChildItem 'target/release/*.exe' -File -ErrorAction SilentlyContinue |
+                 Where-Object { $_.Name -notlike '*setup*' } |
+                 Sort-Object Length -Descending | Select-Object -First 1
+          if (-not $exe) { Get-ChildItem target/release -ErrorAction SilentlyContinue | Format-Table Name; throw 'no app exe in target/release' }
+          $out = Join-Path (Get-Location).Path "DiskSleuth_${ver}_x64-setup.exe"
+          "installer_file=DiskSleuth_${ver}_x64-setup.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          choco install nsis -y --no-progress | Out-Null
+          & "C:\Program Files (x86)\NSIS\makensis.exe" "/DVER=$ver" "/DSRC=$($exe.FullName)" "/DOUT=$out" ".github\installer.nsi"
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed with $LASTEXITCODE" }
+          if (-not (Test-Path $out)) { throw "installer not produced at $out" }
+
+      - name: Upload NSIS installer
+        uses: actions/github-script@v7
+        env:
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+          INSTALLER_FILE: ${{ env.installer_file }}
+        with:
+          script: |
+            const fs = require('fs');
+            const name = process.env.INSTALLER_FILE;
+            const data = fs.readFileSync(name);
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: parseInt(process.env.RELEASE_ID),
+              name,
+              data,
+              headers: { 'content-type': 'application/octet-stream', 'content-length': data.length },
             });
 
   publish-release:

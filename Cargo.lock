@@ -914,7 +914,7 @@ dependencies = [
 
 [[package]]
 name = "disksleuth"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "disksleuth-gui",
@@ -926,7 +926,7 @@ dependencies = [
 
 [[package]]
 name = "disksleuth-core"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -947,7 +947,7 @@ dependencies = [
 
 [[package]]
 name = "disksleuth-gui"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "chrono",

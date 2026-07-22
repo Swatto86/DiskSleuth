@@ -612,7 +612,7 @@ fn build_tree_from_mft(
                 format!(
                     "{}\\{}",
                     root_path.to_string_lossy().trim_end_matches('\\'),
-                    &rel_path
+                    rel_path
                 )
             };
             // symlink_metadata: report the link/reparse point itself rather
