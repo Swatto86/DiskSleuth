@@ -137,6 +137,16 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Verify Cargo.toml version matches the release version
+        shell: pwsh
+        run: |
+          $expected = "${{ needs.create-release.outputs.version }}"
+          $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+?)"' | Select-Object -First 1).Matches.Groups[1].Value
+          if ($ver -ne $expected) {
+            throw "Cargo.toml [workspace.package] version '$ver' does not match the release version '$expected'. Bump the manifest first (use .\update-application.ps1 -Version $expected) and re-run."
+          }
+          Write-Host "Version check OK: $ver"
+
       - name: Rust cache
         uses: swatinem/rust-cache@v2
 
@@ -180,7 +190,9 @@ jobs:
       - name: Build NSIS installer
         shell: pwsh
         run: |
-          $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+?)"' | Select-Object -First 1).Matches.Groups[1].Value
+          # Single source of truth: the release version, already verified
+          # against Cargo.toml by the version-check step above.
+          $ver = "${{ needs.create-release.outputs.version }}"
           $exe = Get-ChildItem 'target/release/*.exe' -File -ErrorAction SilentlyContinue |
                  Where-Object { $_.Name -notlike '*setup*' } |
                  Sort-Object Length -Descending | Select-Object -First 1
