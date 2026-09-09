@@ -179,6 +179,10 @@ impl AppState {
         self.selected_node = None;
         self.treemap_back.clear();
         self.treemap_forward.clear();
+        // A duplicate search started before the deletion hashed the old tree;
+        // letting it finish would write pre-delete groups straight back into
+        // `duplicates` and undo the invalidation above.
+        self.cancel_duplicate_scan();
         self.old_files = None;
         self.duplicates = None;
 

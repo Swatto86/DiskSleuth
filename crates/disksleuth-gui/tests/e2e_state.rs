@@ -684,6 +684,47 @@ fn purge_node_updates_results() {
     );
 }
 
+/// Deleting a node must abandon an in-flight duplicate search — its results
+/// describe the pre-delete tree.
+#[test]
+fn purge_cancels_in_flight_duplicate_scan() {
+    let tmp = TempDir::new().unwrap();
+    let payload = vec![0x5Au8; 4096];
+    std::fs::write(tmp.path().join("copy_one.bin"), &payload).unwrap();
+    std::fs::write(tmp.path().join("copy_two.bin"), &payload).unwrap();
+
+    let mut state = AppState::new();
+    state.start_scan(tmp.path().to_path_buf());
+    pump_until_done(&mut state);
+
+    state.duplicate_min_size = 1;
+    state.start_duplicate_scan();
+    assert!(state.duplicate_scan.is_some());
+
+    let victim = {
+        let tree = state.current_tree().expect("tree");
+        let root = tree.roots[0];
+        *tree
+            .children(root)
+            .iter()
+            .find(|&&c| !tree.node(c).is_dir)
+            .expect("a file child")
+    };
+    state.purge_node_from_results(victim);
+
+    assert!(
+        state.duplicate_scan.is_none(),
+        "deleting a node must cancel the in-flight duplicate search"
+    );
+
+    // The worker's result must never reach state afterwards.
+    for _ in 0..50 {
+        assert!(!state.process_duplicate_messages());
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(state.duplicates.is_none());
+}
+
 /// Requesting deletion of a scan root is rejected with an error flash.
 #[test]
 fn request_delete_rejects_root() {
