@@ -330,8 +330,10 @@ pub fn scan_mft(
             // the result inline with no heap allocation at all.
             let file_name: CompactString = char::decode_utf16(
                 output_buf[name_start..name_end]
-                    .chunks_exact(2)
-                    .map(|c| u16::from_le_bytes([c[0], c[1]])),
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| u16::from_le_bytes(*c)),
             )
             .map(|r| r.unwrap_or('\u{FFFD}'))
             .collect();

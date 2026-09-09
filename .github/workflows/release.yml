@@ -150,6 +150,12 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
 
+      - name: Check formatting (cargo fmt)
+        run: cargo fmt --all -- --check
+
+      - name: Lint (cargo clippy)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
       - name: Run tests
         run: cargo test --workspace
 

@@ -352,7 +352,7 @@ pub fn treemap(ui: &mut Ui, state: &AppState) -> Option<TreemapAction> {
             painter.rect_stroke(
                 tr.rect,
                 0.0,
-                egui::Stroke::new(1.0, border_color),
+                egui::Stroke::new(1.0_f32, border_color),
                 egui::StrokeKind::Inside,
             );
         } else {
@@ -368,7 +368,7 @@ pub fn treemap(ui: &mut Ui, state: &AppState) -> Option<TreemapAction> {
             painter.rect_stroke(
                 tr.rect,
                 0.0,
-                egui::Stroke::new(0.5, border_color),
+                egui::Stroke::new(0.5_f32, border_color),
                 egui::StrokeKind::Inside,
             );
 
@@ -449,7 +449,7 @@ pub fn treemap(ui: &mut Ui, state: &AppState) -> Option<TreemapAction> {
         painter.rect_stroke(
             highlight_rect,
             0.0,
-            egui::Stroke::new(2.0, highlight_color),
+            egui::Stroke::new(2.0_f32, highlight_color),
             egui::StrokeKind::Inside,
         );
 
@@ -515,7 +515,7 @@ pub fn treemap(ui: &mut Ui, state: &AppState) -> Option<TreemapAction> {
                 painter.rect_stroke(
                     sel_rect,
                     0.0,
-                    egui::Stroke::new(2.5, sel_color),
+                    egui::Stroke::new(2.5_f32, sel_color),
                     egui::StrokeKind::Inside,
                 );
                 break;

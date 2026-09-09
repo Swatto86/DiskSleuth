@@ -73,7 +73,7 @@ pub fn drive_picker(ui: &mut Ui, state: &mut AppState) {
         let stroke = if response.has_focus() {
             focus_stroke
         } else {
-            egui::Stroke::new(1.0, border_color)
+            egui::Stroke::new(1.0_f32, border_color)
         };
         painter.rect_stroke(rect, 4.0, stroke, egui::StrokeKind::Outside);
 
