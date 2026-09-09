@@ -3,16 +3,24 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use windows::core::PCWSTR;
 use windows::Win32::UI::Shell::{
-    SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FO_DELETE,
-    SHFILEOPSTRUCTW,
+    SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FO_DELETE, SHFILEOPSTRUCTW,
 };
+
+/// Flags for the Recycle Bin delete.
+///
+/// `FOF_SILENT` is deliberately NOT set: the caller blocks the render thread
+/// for the whole operation, so the shell's progress dialog is the only
+/// feedback (and the only cancel) the user gets.
+const DELETE_FLAGS: u16 = (FOF_ALLOWUNDO.0 | FOF_NOCONFIRMATION.0 | FOF_NOERRORUI.0) as u16;
 
 /// Move a file or directory (recursively) to the Recycle Bin.
 ///
 /// Uses the shell's `FOF_ALLOWUNDO` delete so the item can be restored by
-/// the user. No confirmation or progress UI is shown — callers are expected
-/// to confirm with the user first. On volumes without a Recycle Bin (e.g.
-/// network shares) the shell deletes permanently, mirroring Explorer.
+/// the user. No confirmation prompt is shown — callers are expected to confirm
+/// with the user first — but the shell's own progress dialog is allowed to
+/// appear for operations long enough to need one. On volumes without a
+/// Recycle Bin (e.g. network shares) the shell deletes permanently, mirroring
+/// Explorer.
 pub fn move_to_recycle_bin(path: &Path) -> anyhow::Result<()> {
     if !path.exists() {
         anyhow::bail!("path does not exist: {}", path.display());
@@ -26,7 +34,7 @@ pub fn move_to_recycle_bin(path: &Path) -> anyhow::Result<()> {
     let mut op = SHFILEOPSTRUCTW {
         wFunc: FO_DELETE,
         pFrom: PCWSTR(wide.as_ptr()),
-        fFlags: (FOF_ALLOWUNDO.0 | FOF_NOCONFIRMATION.0 | FOF_SILENT.0 | FOF_NOERRORUI.0) as u16,
+        fFlags: DELETE_FLAGS,
         ..Default::default()
     };
 
@@ -68,6 +76,22 @@ mod tests {
 
         move_to_recycle_bin(&dir).expect("recycle must succeed");
         assert!(!dir.exists());
+    }
+
+    /// The shell's progress dialog must not be suppressed: it is the only
+    /// feedback and the only cancel a user gets while the render thread is
+    /// blocked on a large recursive delete.
+    #[test]
+    fn progress_ui_is_not_suppressed() {
+        use windows::Win32::UI::Shell::FOF_SILENT;
+        assert_eq!(
+            DELETE_FLAGS & FOF_SILENT.0 as u16,
+            0,
+            "FOF_SILENT must not be set — it hides the only progress UI"
+        );
+        assert_ne!(DELETE_FLAGS & FOF_ALLOWUNDO.0 as u16, 0);
+        assert_ne!(DELETE_FLAGS & FOF_NOCONFIRMATION.0 as u16, 0);
+        assert_ne!(DELETE_FLAGS & FOF_NOERRORUI.0 as u16, 0);
     }
 
     /// A missing path errors instead of silently succeeding.
