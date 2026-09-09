@@ -38,6 +38,9 @@ pub fn drive_picker(ui: &mut Ui, state: &mut AppState) {
     } else {
         egui::Color32::from_rgb(0xb0, 0xbc, 0xd8)
     };
+    // Cards are painted by hand, so they never pass through `Style::interact`
+    // and get no focus appearance for free — this is drawn explicitly below.
+    let focus_stroke = ui.visuals().selection.stroke;
     // Text on cards: white on dark cards, near-black on light cards.
     let card_text = ui.visuals().text_color();
 
@@ -55,23 +58,24 @@ pub fn drive_picker(ui: &mut Ui, state: &mut AppState) {
 
         let painter = ui.painter_at(rect);
 
-        // Background — colour adapts to theme and selection state.
+        // Background — colour adapts to theme, selection and keyboard focus.
         let bg = if is_selected {
             card_bg_selected
-        } else if response.hovered() {
+        } else if response.hovered() || response.has_focus() {
             card_bg_hover
         } else {
             card_bg
         };
         painter.rect_filled(rect, 4.0, bg);
 
-        // Subtle border.
-        painter.rect_stroke(
-            rect,
-            4.0,
-            egui::Stroke::new(1.0, border_color),
-            egui::StrokeKind::Outside,
-        );
+        // Border — a keyboard-focused card gets the theme's focus stroke so
+        // Tab navigation is visible; otherwise the subtle card border.
+        let stroke = if response.has_focus() {
+            focus_stroke
+        } else {
+            egui::Stroke::new(1.0, border_color)
+        };
+        painter.rect_stroke(rect, 4.0, stroke, egui::StrokeKind::Outside);
 
         // Drive letter and label.
         let label = if drive.label.is_empty() {
