@@ -100,6 +100,17 @@ fn cancel_scan_sets_cancelled_flag() {
     state.start_scan(tmp.path().to_path_buf());
     state.cancel_scan();
 
+    // cancel_scan must reach the scanner: assert before pumping, because
+    // finalize_scan clears scan_handle once a terminal message arrives.
+    assert!(
+        state
+            .scan_handle
+            .as_ref()
+            .expect("scan handle must exist while scanning")
+            .is_cancelled(),
+        "cancel_scan must set the scanner's cancel flag"
+    );
+
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while state.phase == AppPhase::Scanning {
         assert!(std::time::Instant::now() < deadline, "timed out");
@@ -107,12 +118,13 @@ fn cancel_scan_sets_cancelled_flag() {
         std::thread::sleep(Duration::from_millis(5));
     }
 
-    // The scan may complete so quickly that cancellation is never observed.
-    // Accept either cancelled state or a normal Results state.
-    assert_ne!(
-        state.phase,
-        AppPhase::Scanning,
-        "phase must leave Scanning after cancel"
+    // The scan may finish before the scanner polls the cancel flag, so the
+    // terminal state may be either Cancelled or Complete — both must land
+    // in Results with a usable tree.
+    assert_eq!(state.phase, AppPhase::Results);
+    assert!(
+        state.current_tree().is_some(),
+        "a cancelled scan must still hand over its partial tree"
     );
 }
 
