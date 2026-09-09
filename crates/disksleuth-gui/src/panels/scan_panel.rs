@@ -8,6 +8,25 @@ use egui::Ui;
 pub fn scan_panel(ui: &mut Ui, state: &mut AppState) {
     widgets::drive_picker::drive_picker(ui, state);
 
+    // Skipped items: the status bar only shows the count, so give the user a
+    // way to open the list of paths behind it.
+    if state.scan_error_count > 0 {
+        ui.add_space(6.0);
+        if ui
+            .add(egui::SelectableLabel::new(
+                state.show_errors,
+                format!(
+                    "\u{26a0} {} skipped items",
+                    disksleuth_core::model::size::format_count(state.scan_error_count)
+                ),
+            ))
+            .on_hover_text("Show the paths that could not be read during the scan")
+            .clicked()
+        {
+            state.show_errors = !state.show_errors;
+        }
+    }
+
     // Note: scanning progress (spinner + file count) is shown in the tree
     // view and the status bar — no need to duplicate it here.
 

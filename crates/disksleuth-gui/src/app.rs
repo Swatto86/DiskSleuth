@@ -403,6 +403,7 @@ impl eframe::App for DiskSleuthApp {
         panels::old_files_window::old_files_window(ctx, &mut self.state);
         panels::duplicates_window::duplicates_window(ctx, &mut self.state);
         panels::history_window::history_window(ctx, &mut self.state);
+        panels::errors_window::errors_window(ctx, &mut self.state);
         panels::delete_dialog::delete_dialog(ctx, &mut self.state);
 
         // ── Central panel (Treemap) ───────────────────────────────────────
