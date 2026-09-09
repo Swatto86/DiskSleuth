@@ -127,7 +127,8 @@ pub fn find_duplicates_among(
         .flat_map_iter(|group| {
             if cancel.load(Ordering::Relaxed) {
                 // Report skipped files so the progress bar still completes.
-                done.fetch_add(group.len(), Ordering::Relaxed);
+                let n = done.fetch_add(group.len(), Ordering::Relaxed) + group.len();
+                progress(n, total);
                 return Vec::new().into_iter();
             }
 
@@ -140,7 +141,10 @@ pub fn find_duplicates_among(
                     None => unreadable += 1,
                 }
             }
-            done.fetch_add(unreadable, Ordering::Relaxed);
+            if unreadable > 0 {
+                let n = done.fetch_add(unreadable, Ordering::Relaxed) + unreadable;
+                progress(n, total);
+            }
 
             // Pass 3: full-content hash for prefix-matching files.
             let mut result: Vec<DuplicateGroup> = Vec::new();
@@ -477,5 +481,68 @@ mod tests {
             max_seen.fetch_max(done, Ordering::Relaxed);
         });
         assert_eq!(max_seen.load(Ordering::Relaxed), total);
+    }
+
+    /// Unreadable files advance the shared counter through a path of their
+    /// own, so that path must publish too — otherwise the progress bar stops
+    /// permanently short of the total. Every candidate here becomes unreadable
+    /// so the `unreadable` branch is the *only* thing that can report.
+    #[test]
+    fn progress_completes_when_candidates_are_unreadable() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (mut tree, root) = tree_for(tmp.path());
+        let payload = vec![3u8; 8192];
+        add_disk_file(&mut tree, root, tmp.path(), "gone_a.bin", &payload);
+        add_disk_file(&mut tree, root, tmp.path(), "gone_b.bin", &payload);
+        tree.aggregate_sizes();
+
+        let candidates = collect_candidates(&tree, 1);
+        let total = candidates.len();
+        assert_eq!(total, 2);
+
+        // Both candidates disappear after collection: hashing fails for each,
+        // so they are accounted for only via the `unreadable` counter.
+        std::fs::remove_file(tmp.path().join("gone_a.bin")).unwrap();
+        std::fs::remove_file(tmp.path().join("gone_b.bin")).unwrap();
+
+        let max_seen = AtomicUsize::new(0);
+        find_duplicates_among(candidates, &AtomicBool::new(false), |done, t| {
+            assert_eq!(t, total);
+            max_seen.fetch_max(done, Ordering::Relaxed);
+        });
+        assert_eq!(
+            max_seen.load(Ordering::Relaxed),
+            total,
+            "progress must reach the total even when every candidate is unreadable"
+        );
+    }
+
+    /// The cancelled-group shortcut also advances the counter on its own, and
+    /// must report it: a cancelled search still has to leave the progress bar
+    /// showing a complete count rather than a stalled one.
+    #[test]
+    fn progress_completes_on_a_cancelled_search() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (mut tree, root) = tree_for(tmp.path());
+        let payload = vec![5u8; 4096];
+        add_disk_file(&mut tree, root, tmp.path(), "c1.bin", &payload);
+        add_disk_file(&mut tree, root, tmp.path(), "c2.bin", &payload);
+        tree.aggregate_sizes();
+
+        let candidates = collect_candidates(&tree, 1);
+        let total = candidates.len();
+        assert_eq!(total, 2);
+
+        let max_seen = AtomicUsize::new(0);
+        let groups = find_duplicates_among(candidates, &AtomicBool::new(true), |done, t| {
+            assert_eq!(t, total);
+            max_seen.fetch_max(done, Ordering::Relaxed);
+        });
+        assert!(groups.is_empty());
+        assert_eq!(
+            max_seen.load(Ordering::Relaxed),
+            total,
+            "a cancelled search must still report its skipped files as done"
+        );
     }
 }

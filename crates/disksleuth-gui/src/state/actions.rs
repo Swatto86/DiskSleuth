@@ -240,8 +240,10 @@ impl AppState {
         let spawned = std::thread::Builder::new()
             .name("disksleuth-duplicates".into())
             .spawn(move || {
+                // fetch_max, not store: the callback runs on several rayon
+                // threads and a lagging one must not clobber a higher count.
                 let groups = find_duplicates_among(candidates, &cancel_worker, |done, _| {
-                    done_worker.store(done, Ordering::Relaxed);
+                    done_worker.fetch_max(done, Ordering::Relaxed);
                 });
                 let _ = tx.send(groups);
             });
