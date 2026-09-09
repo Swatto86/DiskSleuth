@@ -666,6 +666,32 @@ fn request_delete_rejects_root() {
     assert!(state.status_flash.as_ref().is_some_and(|f| f.is_error));
 }
 
+/// Requesting a delete must leave the dialog disarmed, so the key press that
+/// opened it cannot also confirm it.
+#[test]
+fn request_delete_leaves_dialog_disarmed() {
+    let tmp = make_temp_tree();
+    let mut state = AppState::new();
+    state.start_scan(tmp.path().to_path_buf());
+    pump_until_done(&mut state);
+
+    let tree = state.current_tree().expect("tree");
+    let root = tree.roots[0];
+    let victim = *tree
+        .children(root)
+        .iter()
+        .find(|&&c| !tree.node(c).is_dir)
+        .expect("a file child");
+
+    state.delete_dialog_armed = true;
+    state.request_delete(victim);
+    assert!(state.pending_delete.is_some());
+    assert!(
+        !state.delete_dialog_armed,
+        "dialog must ignore the key press that opened it"
+    );
+}
+
 // ── AppState construction ─────────────────────────────────────────────────────
 
 /// A freshly created `AppState` must start in the `Idle` phase.

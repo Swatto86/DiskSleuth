@@ -188,6 +188,9 @@ pub struct AppState {
     // ── Deletion ───────────────────────────────────────
     /// Node awaiting user confirmation before Recycle Bin deletion.
     pub pending_delete: Option<NodeIndex>,
+    /// `false` on the frame the confirmation dialog first appears, so the key
+    /// press that opened it cannot also answer it.
+    pub delete_dialog_armed: bool,
 
     // ── Live write monitor ─────────────────────────────
     /// Whether the monitor bottom panel is visible.
@@ -263,6 +266,7 @@ impl AppState {
             history_compare: None,
             history_diff: None,
             pending_delete: None,
+            delete_dialog_armed: false,
             show_monitor_panel: false,
             monitor_active: false,
             monitor_path: String::new(),

@@ -79,6 +79,13 @@ pub fn delete_dialog(ctx: &egui::Context, state: &mut AppState) {
             ui.add_space(2.0);
         });
 
+    // First frame: the dialog was opened by a key press that is still in this
+    // frame's input. Arm it now and answer nothing yet.
+    if !state.delete_dialog_armed {
+        state.delete_dialog_armed = true;
+        return;
+    }
+
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         cancel = true;
     }

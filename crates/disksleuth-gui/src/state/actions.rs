@@ -117,6 +117,9 @@ impl AppState {
             return;
         }
         self.pending_delete = Some(target);
+        // The dialog must ignore keyboard input until it has been on screen
+        // for a full frame, otherwise the key press that opened it confirms it.
+        self.delete_dialog_armed = false;
     }
 
     /// Move the pending node to the Recycle Bin and update the results.
