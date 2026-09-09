@@ -208,3 +208,68 @@ fn focused_drive_card_paints_the_focus_stroke() {
         "the Tab-focused drive card must paint a visible focus outline"
     );
 }
+
+// ── Old-files window truncation ────────────────────────────────────────────
+
+/// A state holding a real completed scan, so windows that require one will
+/// render their contents rather than the "Run a scan first" placeholder.
+fn scanned_state(dir: &std::path::Path) -> AppState {
+    let mut state = AppState::new();
+    state.start_scan(dir.to_path_buf());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while state.phase != disksleuth_gui::state::AppPhase::Results {
+        assert!(std::time::Instant::now() < deadline, "scan timed out");
+        state.process_scan_messages();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    state
+}
+
+fn stale_files(n: usize) -> Vec<disksleuth_core::analysis::StaleFile> {
+    (0..n)
+        .map(|i| disksleuth_core::analysis::StaleFile {
+            index: disksleuth_core::model::NodeIndex::new(i),
+            path: format!(r"C:\old\file{i}.bin"),
+            size: 1024,
+            last_modified: std::time::SystemTime::now(),
+            age_days: 400,
+        })
+        .collect()
+}
+
+/// The list is capped at `MAX_OLD_FILES`, so a saturated list must be labelled
+/// as a top-N slice rather than presented as the total number of stale files.
+#[test]
+fn old_files_header_marks_a_truncated_list() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    std::fs::write(tmp.path().join("a.bin"), b"x").unwrap();
+    let mut state = scanned_state(tmp.path());
+    state.show_old_files_window = true;
+    state.old_files = Some(stale_files(disksleuth_gui::state::MAX_OLD_FILES));
+
+    let text = painted_text(|ctx| {
+        disksleuth_gui::panels::old_files_window::old_files_window(ctx, &mut state);
+    });
+
+    assert!(
+        text.contains("more may exist"),
+        "a saturated list must say so; painted:\n{text}"
+    );
+}
+
+/// A list below the cap is the complete answer and is reported plainly.
+#[test]
+fn old_files_header_is_plain_when_not_truncated() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    std::fs::write(tmp.path().join("a.bin"), b"x").unwrap();
+    let mut state = scanned_state(tmp.path());
+    state.show_old_files_window = true;
+    state.old_files = Some(stale_files(3));
+
+    let text = painted_text(|ctx| {
+        disksleuth_gui::panels::old_files_window::old_files_window(ctx, &mut state);
+    });
+
+    assert!(text.contains("3 files"), "painted:\n{text}");
+    assert!(!text.contains("more may exist"));
+}

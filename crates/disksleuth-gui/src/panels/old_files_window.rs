@@ -1,6 +1,6 @@
 /// Floating window listing stale files — not modified within a selectable
 /// age threshold — sorted by size so the biggest reclaim wins come first.
-use crate::state::AppState;
+use crate::state::{AppState, MAX_OLD_FILES};
 use disksleuth_core::model::size::format_size;
 use disksleuth_core::model::NodeIndex;
 
@@ -64,11 +64,15 @@ pub fn old_files_window(ctx: &egui::Context, state: &mut AppState) {
                     let total: u64 = files.iter().map(|f| f.size).sum();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            egui::RichText::new(format!(
-                                "{} files · {} listed",
-                                files.len(),
-                                format_size(total)
-                            ))
+                            egui::RichText::new(if files.len() >= MAX_OLD_FILES {
+                                format!(
+                                    "largest {} shown · {} — more may exist",
+                                    files.len(),
+                                    format_size(total)
+                                )
+                            } else {
+                                format!("{} files · {}", files.len(), format_size(total))
+                            })
                             .size(11.0)
                             .color(muted),
                         );

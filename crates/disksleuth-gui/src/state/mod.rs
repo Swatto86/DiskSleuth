@@ -16,7 +16,7 @@ mod actions;
 mod rows;
 mod treemap_nav;
 
-pub use actions::{DuplicateScan, ExportFormat, StatusFlash};
+pub use actions::{DuplicateScan, ExportFormat, StatusFlash, MAX_OLD_FILES};
 
 use disksleuth_core::analysis::{
     analyse_file_types, CategoryStats, DuplicateGroup, ScanSnapshot, StaleFile,

@@ -590,6 +590,20 @@ fn duplicate_scan_finds_pairs() {
     assert_eq!(groups[0].size, 4096);
 }
 
+/// The old-files cache is capped, and the cap is visible to the UI so a
+/// truncated list can be labelled as such.
+#[test]
+fn old_files_cache_is_capped_and_cap_is_public() {
+    let tmp = make_temp_tree();
+    let mut state = AppState::new();
+    state.start_scan(tmp.path().to_path_buf());
+    pump_until_done(&mut state);
+    state.old_files_min_age_days = 0;
+    state.refresh_old_files();
+    let old = state.old_files.as_deref().expect("cache must be set");
+    assert!(old.len() <= disksleuth_gui::state::MAX_OLD_FILES);
+}
+
 /// Changing the threshold discards results computed for the previous one.
 #[test]
 fn set_duplicate_min_size_clears_stale_results() {

@@ -11,7 +11,10 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 /// Maximum stale files computed for the old-files window.
-const MAX_OLD_FILES: usize = 200;
+///
+/// Public so the window can tell a full list from a truncated one and label
+/// it accordingly.
+pub const MAX_OLD_FILES: usize = 200;
 
 /// Signature shared by the tree export writers (CSV / JSON).
 type ExportWriter = fn(&FileTree, &std::path::Path) -> anyhow::Result<u64>;
