@@ -7,10 +7,10 @@
 /// 2. Hash the first 4 KB of each remaining file to split size groups.
 /// 3. Hash the full content of files whose prefix still matches.
 ///
-/// Hashing uses 128-bit FNV-1a. Combined with the equal-size requirement, an
-/// accidental collision is astronomically unlikely, and the dependency-free
-/// implementation keeps the binary small. Hard-linked files appear as
-/// duplicates (they have identical content by definition).
+/// Hashing uses 128-bit FNV-1a purely as a fast filter: it is not collision
+/// resistant, so every surviving group is confirmed byte-for-byte before it
+/// is reported. Hard-linked files appear as duplicates (they have identical
+/// content by definition).
 ///
 /// Size groups are hashed in parallel via rayon. The work is cancellable and
 /// reports progress through a callback, so a frontend can run it on a
@@ -171,7 +171,7 @@ pub fn find_duplicates_among(
                     by_content
                         .into_iter()
                         .filter(|(_, files)| files.len() >= 2)
-                        .map(|((_, size), files)| DuplicateGroup { size, files }),
+                        .flat_map(|((_, size), files)| verify_group(size, files)),
                 );
             }
             result.into_iter()
@@ -237,6 +237,65 @@ fn hash_full(path: &std::path::Path) -> Option<(u128, u64)> {
         }
     }
     Some((hash, total))
+}
+
+// ── Byte-for-byte confirmation ──────────────────────────────────────────────
+
+/// Read up to `buf.len()` bytes, tolerating short reads. `None` on error.
+fn fill(reader: &mut impl Read, buf: &mut [u8]) -> Option<usize> {
+    let mut filled = 0usize;
+    while filled < buf.len() {
+        match reader.read(&mut buf[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(_) => return None,
+        }
+    }
+    Some(filled)
+}
+
+/// Byte-for-byte comparison of two files. `false` if either is unreadable.
+///
+/// The hash passes are only a filter: FNV-1a is not collision resistant, so
+/// two files are never reported as duplicates without this confirmation.
+fn files_identical(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let (Ok(mut ra), Ok(mut rb)) = (std::fs::File::open(a), std::fs::File::open(b)) else {
+        return false;
+    };
+    let mut ba = vec![0u8; READ_BUF_LEN];
+    let mut bb = vec![0u8; READ_BUF_LEN];
+    loop {
+        let (Some(na), Some(nb)) = (fill(&mut ra, &mut ba), fill(&mut rb, &mut bb)) else {
+            return false;
+        };
+        if na != nb || ba[..na] != bb[..nb] {
+            return false;
+        }
+        if na == 0 {
+            return true;
+        }
+    }
+}
+
+/// Split a hash-matched group into subgroups whose contents are verified
+/// identical, dropping any subgroup left with fewer than two files.
+fn verify_group(size: u64, files: Vec<DuplicateFile>) -> Vec<DuplicateGroup> {
+    let mut buckets: Vec<Vec<DuplicateFile>> = Vec::new();
+    for f in files {
+        let path = std::path::PathBuf::from(&f.path);
+        match buckets
+            .iter_mut()
+            .find(|b| files_identical(std::path::Path::new(&b[0].path), &path))
+        {
+            Some(b) => b.push(f),
+            None => buckets.push(vec![f]),
+        }
+    }
+    buckets
+        .into_iter()
+        .filter(|b| b.len() >= 2)
+        .map(|files| DuplicateGroup { size, files })
+        .collect()
 }
 
 #[cfg(test)]
@@ -353,6 +412,51 @@ mod tests {
 
         let groups = find_duplicates(&tree, 1, &AtomicBool::new(true));
         assert!(groups.is_empty());
+    }
+
+    /// Content equality is confirmed by comparison, not inferred from a hash.
+    #[test]
+    fn files_identical_detects_difference() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let a = tmp.path().join("a.bin");
+        let b = tmp.path().join("b.bin");
+        let c = tmp.path().join("c.bin");
+        std::fs::write(&a, vec![1u8; 5000]).unwrap();
+        std::fs::write(&b, vec![1u8; 5000]).unwrap();
+        let mut diff = vec![1u8; 5000];
+        diff[4999] = 2;
+        std::fs::write(&c, diff).unwrap();
+
+        assert!(files_identical(&a, &b));
+        assert!(
+            !files_identical(&a, &c),
+            "differing tail must not compare equal"
+        );
+        assert!(!files_identical(&a, &tmp.path().join("missing.bin")));
+    }
+
+    /// A hash collision is harmless: `verify_group` receives files the hash
+    /// passes considered equal and splits them on their real contents.
+    #[test]
+    fn verify_group_splits_a_simulated_collision() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mk = |name: &str, fill: u8| {
+            let p = tmp.path().join(name);
+            std::fs::write(&p, vec![fill; 5000]).unwrap();
+            DuplicateFile {
+                index: NodeIndex::new(0),
+                path: p.to_string_lossy().into_owned(),
+            }
+        };
+
+        // Two genuine duplicates plus a colliding impostor in one "group".
+        let groups = verify_group(5000, vec![mk("d1.bin", 7), mk("d2.bin", 7), mk("x.bin", 8)]);
+        assert_eq!(groups.len(), 1, "the impostor must not form a group");
+        assert_eq!(groups[0].files.len(), 2, "only the real pair survives");
+        assert!(groups[0].files.iter().all(|f| !f.path.ends_with("x.bin")));
+
+        // A group of purely colliding files reports nothing at all.
+        assert!(verify_group(5000, vec![mk("p.bin", 1), mk("q.bin", 2)]).is_empty());
     }
 
     /// Progress reaches `(total, total)` on an uncancelled run.
