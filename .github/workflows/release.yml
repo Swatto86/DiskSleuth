@@ -42,12 +42,22 @@ jobs:
 
       - name: Get version
         id: get-version
+        env:
+          # Untrusted manual-run input. Passed via the environment (not
+          # template interpolation inside the script) so it can never be
+          # evaluated as shell code.
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$DISPATCH_VERSION"
           else
-            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+            VERSION="${GITHUB_REF#refs/tags/v}"
           fi
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
+            echo "Refusing to release: invalid version '$VERSION'" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Fetch tags with annotations
         run: |
@@ -60,8 +70,9 @@ jobs:
           # environment variable (not template interpolation inside the
           # script) so arbitrary Markdown cannot inject shell commands.
           DISPATCH_NOTES: ${{ github.event.inputs.notes }}
+          VERSION: ${{ steps.get-version.outputs.version }}
         run: |
-          TAG_NAME="v${{ steps.get-version.outputs.version }}"
+          TAG_NAME="v$VERSION"
           echo "Extracting release notes for tag: $TAG_NAME"
 
           # Manual runs may provide notes directly (no tag exists yet).
