@@ -483,6 +483,31 @@ fn get_ntfs_volume_data(handle: HANDLE) -> Option<NTFS_VOLUME_DATA_BUFFER> {
     }
 }
 
+/// Upper bound on the ancestor walk used by [`creates_cycle`].
+///
+/// Far deeper than any real NTFS path; a chain longer than this is already
+/// corrupt and is treated as a cycle.
+const MAX_ANCESTOR_WALK: usize = 4096;
+
+/// `true` if attaching `child` under `parent` would create a cycle — either
+/// `parent == child`, or `child` is already an ancestor of `parent`, or the
+/// parent chain does not terminate within [`MAX_ANCESTOR_WALK`] steps.
+fn creates_cycle(tree: &FileTree, parent: NodeIndex, child: NodeIndex) -> bool {
+    let mut cursor = Some(parent);
+    let mut steps = 0usize;
+    while let Some(idx) = cursor {
+        if idx == child {
+            return true;
+        }
+        steps += 1;
+        if steps > MAX_ANCESTOR_WALK {
+            return true;
+        }
+        cursor = tree.nodes[idx.idx()].parent;
+    }
+    false
+}
+
 /// Build a `FileTree` from raw MFT records.
 ///
 /// Strategy:
@@ -564,9 +589,12 @@ fn build_tree_from_mft(
             None => root_idx, // orphan → attach to root
         };
 
-        // A corrupt record whose parent resolves to itself would otherwise
-        // create a self-cycle that hangs every tree traversal.
-        if parent_idx == child_idx {
+        // A corrupt or stale record can name a parent that is really a
+        // descendant (NTFS reuses record numbers, and the sequence number is
+        // masked off above). Linking it would put a cycle in the parent
+        // chain, and full_path / breadcrumbs / is_in_subtree would then loop
+        // forever. Reject any link whose ancestor walk reaches this node.
+        if creates_cycle(&tree, parent_idx, child_idx) {
             parent_idx = root_idx;
         }
 
@@ -644,4 +672,41 @@ fn build_tree_from_mft(
     tree.aggregate_sizes();
 
     (tree, error_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dir_entry(file_ref: u64, parent_ref: u64, name: &str) -> MftEntry {
+        MftEntry {
+            file_ref,
+            parent_ref,
+            file_name: CompactString::new(name),
+            is_dir: true,
+        }
+    }
+
+    /// A stale/reused parent reference can point at a descendant. The tree
+    /// builder must break the cycle instead of producing a parent chain that
+    /// never reaches a root.
+    #[test]
+    fn mutual_parent_refs_do_not_create_a_cycle() {
+        let records = vec![dir_entry(100, 101, "alpha"), dir_entry(101, 100, "beta")];
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let (tree, _errors) = build_tree_from_mft(&records, "C:", Path::new("C:\\"), &tx);
+
+        for i in 0..tree.len() {
+            let mut cursor = Some(NodeIndex::new(i));
+            let mut steps = 0usize;
+            while let Some(idx) = cursor {
+                steps += 1;
+                assert!(
+                    steps < 1000,
+                    "parent chain from node {i} does not terminate"
+                );
+                cursor = tree.node(idx).parent;
+            }
+        }
+    }
 }
