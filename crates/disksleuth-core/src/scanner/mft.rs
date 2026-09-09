@@ -610,9 +610,12 @@ fn build_tree_from_mft(
     // a syscall that benefits from concurrent execution on SSDs/NVMe.
     // Results are written back in a single sequential pass.
     let total_files = tree.nodes.iter().filter(|n| !n.is_dir).count();
+    // Update carries absolute totals, so a placeholder 0 would erase the
+    // directory count the UI accumulated during enumeration.
+    let total_dirs = tree.nodes.iter().filter(|n| n.is_dir).count();
     let _ = progress_tx.send(ScanProgress::Update {
         files_found: total_files as u64,
-        dirs_found: 0,
+        dirs_found: total_dirs as u64,
         total_size: 0,
         current_path: format!("Reading file sizes... 0/{total_files}"),
     });
@@ -668,6 +671,21 @@ fn build_tree_from_mft(
     }
     error_count += phase_c_errors;
 
+    // Sizes are only known once the stat pass has written them back, so this
+    // is the first Update that can carry a truthful total.
+    let scanned_bytes: u64 = tree
+        .nodes
+        .iter()
+        .filter(|n| !n.is_dir)
+        .map(|n| n.size)
+        .sum();
+    let _ = progress_tx.send(ScanProgress::Update {
+        files_found: total_files as u64,
+        dirs_found: total_dirs as u64,
+        total_size: scanned_bytes,
+        current_path: format!("Aggregating {total_files} files..."),
+    });
+
     // Phase D: Aggregate sizes bottom-up.
     tree.aggregate_sizes();
 
@@ -685,6 +703,48 @@ mod tests {
             file_name: CompactString::new(name),
             is_dir: true,
         }
+    }
+
+    /// Regression: every Update emitted while building the tree must carry the
+    /// real directory count. A `0` placeholder resets the UI's counter, which
+    /// assigns the field directly.
+    #[test]
+    fn build_tree_progress_reports_real_dir_count() {
+        let records = vec![
+            MftEntry {
+                file_ref: 30,
+                parent_ref: 5,
+                file_name: CompactString::new("Docs"),
+                is_dir: true,
+            },
+            MftEntry {
+                file_ref: 31,
+                parent_ref: 30,
+                file_name: CompactString::new("a.txt"),
+                is_dir: false,
+            },
+        ];
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let (tree, _errors) = build_tree_from_mft(&records, "C:", Path::new("C:\\"), &tx);
+        drop(tx);
+
+        let dirs_in_tree = tree.nodes.iter().filter(|n| n.is_dir).count() as u64;
+        assert!(dirs_in_tree > 0, "fixture must contain directories");
+
+        let mut saw_update = false;
+        for msg in rx.iter() {
+            if let ScanProgress::Update { dirs_found, .. } = msg {
+                saw_update = true;
+                assert_eq!(
+                    dirs_found, dirs_in_tree,
+                    "Update must carry the real directory count, not a placeholder"
+                );
+            }
+        }
+        assert!(
+            saw_update,
+            "build_tree_from_mft must emit at least one Update"
+        );
     }
 
     /// A stale/reused parent reference can point at a descendant. The tree

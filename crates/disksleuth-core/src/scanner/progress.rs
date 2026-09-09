@@ -25,6 +25,12 @@ pub enum ScanProgress {
         is_elevated: bool,
     },
     /// Periodic update with running totals.
+    ///
+    /// Every field is an **absolute snapshot**, not a delta: the UI assigns
+    /// each one directly over its previous value. Producers must always send
+    /// their current best value for all three counters — never a `0`
+    /// placeholder for a field they happen not to track, or the on-screen
+    /// counter will visibly reset to zero mid-scan.
     Update {
         files_found: u64,
         dirs_found: u64,
