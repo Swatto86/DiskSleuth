@@ -160,7 +160,7 @@ pub fn duplicates_window(ctx: &egui::Context, state: &mut AppState) {
         });
 
     if let Some(bytes) = new_min_size {
-        state.duplicate_min_size = bytes;
+        state.set_duplicate_min_size(bytes);
     }
     if cancel_search {
         state.cancel_duplicate_scan();

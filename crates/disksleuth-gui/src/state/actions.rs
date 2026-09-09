@@ -206,6 +206,18 @@ impl AppState {
     /// the expensive hashing runs on a named worker thread that reports
     /// progress through shared atomics and delivers the result via a
     /// single-shot channel drained by [`process_duplicate_messages`].
+    /// Change the duplicate-search minimum size.
+    ///
+    /// Any cached results were computed for the previous threshold, so they
+    /// are discarded: showing them under a different threshold would be a lie.
+    pub fn set_duplicate_min_size(&mut self, bytes: u64) {
+        if self.duplicate_min_size == bytes {
+            return;
+        }
+        self.duplicate_min_size = bytes;
+        self.duplicates = None;
+    }
+
     pub fn start_duplicate_scan(&mut self) {
         self.cancel_duplicate_scan();
         let Some(ref tree) = self.tree else { return };

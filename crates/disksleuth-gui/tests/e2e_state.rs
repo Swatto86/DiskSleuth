@@ -578,6 +578,38 @@ fn duplicate_scan_finds_pairs() {
     assert_eq!(groups[0].size, 4096);
 }
 
+/// Changing the threshold discards results computed for the previous one.
+#[test]
+fn set_duplicate_min_size_clears_stale_results() {
+    let tmp = TempDir::new().unwrap();
+    let payload = vec![0x5Au8; 4096];
+    std::fs::write(tmp.path().join("copy_one.bin"), &payload).unwrap();
+    std::fs::write(tmp.path().join("copy_two.bin"), &payload).unwrap();
+
+    let mut state = AppState::new();
+    state.start_scan(tmp.path().to_path_buf());
+    pump_until_done(&mut state);
+
+    state.duplicate_min_size = 1;
+    state.start_duplicate_scan();
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while state.duplicate_scan.is_some() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "duplicate scan timed out"
+        );
+        state.process_duplicate_messages();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(state.duplicates.is_some(), "results must exist first");
+
+    state.set_duplicate_min_size(100 * 1024 * 1024);
+    assert!(
+        state.duplicates.is_none(),
+        "results for the old threshold must be discarded"
+    );
+}
+
 // ── Scan history ───────────────────────────────────────────────────────────────
 
 /// Completed scans are recorded; two scans of the same path produce a
