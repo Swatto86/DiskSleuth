@@ -210,9 +210,11 @@ fn scan_cancellation_sends_cancelled_message() {
 #[test]
 fn scan_sends_progress_updates() {
     let tmp = TempDir::new().expect("failed to create temp dir");
-    // Write enough files that at least one Update message fires.
-    for i in 0..50 {
-        write_bytes(&tmp.path().join(format!("file{i:03}.bin")), 1024);
+    // `scan_parallel` emits one ScanProgress::Update per 5_000 walked
+    // entries, so the fixture must exceed that threshold for an Update to
+    // be sent at all.
+    for i in 0..5_100 {
+        write_bytes(&tmp.path().join(format!("file{i:05}.bin")), 1);
     }
 
     let handle = start_scan(tmp.path().to_path_buf());
@@ -241,11 +243,10 @@ fn scan_sends_progress_updates() {
         }
     }
 
-    // Drain the rest.
-    let _ = drain_to_completion(start_scan(tmp.path().to_path_buf()));
-    // We do not fail if Complete arrived before any visible Update; the
-    // scanner is allowed to report progress at its own cadence.
-    let _ = saw_update; // non-deterministic; we assert no panic/deadlock above.
+    assert!(
+        saw_update,
+        "scanner must send at least one Update before Complete for a 5 100-file scan"
+    );
 }
 
 /// `PROGRESS_CHANNEL_CAPACITY` must be a positive constant so it is never
