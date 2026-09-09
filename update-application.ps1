@@ -172,6 +172,10 @@ Write-Host ""
 $cargoToml = Join-Path $root "Cargo.toml"
 $cargoLock = Join-Path $root "Cargo.lock"
 
+# Set once the version bump is committed: past this point git holds the
+# authoritative manifest, so restoring the snapshots would corrupt the tree.
+$committed = $false
+
 try {
     # ── 1. Collect & validate version ────────────────────────────────────────
 
@@ -368,6 +372,7 @@ try {
     } else {
         Write-Info "  Nothing to commit (version already at $Version) -- skipping commit"
     }
+    $committed = $true
 
     # ── 12. Step 6: Tag and push ──────────────────────────────────────────────
 
@@ -397,7 +402,9 @@ try {
             $ErrorActionPreference = "Stop"
         }
 
+        $ErrorActionPreference = "Continue"
         & git tag -d $oldTag 2>&1 | Out-Null
+        $ErrorActionPreference = "Stop"
 
         $ErrorActionPreference = "Continue"
         & git push origin --delete $oldTag 2>&1 | Out-Null
@@ -426,6 +433,14 @@ try {
 } catch {
     Write-Host ""
     Write-ErrorLine "Release failed: $_"
+
+    if ($committed) {
+        Write-WarnLine "Version bump was already committed -- leaving Cargo.toml and Cargo.lock alone."
+        Write-WarnLine "Check 'git log' and 'git ls-remote --tags origin' before re-running."
+        Write-ErrorLine "Release incomplete. Manifest NOT rolled back (it is already committed)."
+        exit 1
+    }
+
     Write-WarnLine  "Rolling back manifest and lockfile..."
 
     if ($null -ne $originalCargo) {
