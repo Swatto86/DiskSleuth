@@ -160,8 +160,12 @@ mod tests {
         let mut tree = FileTree::with_capacity(3);
         let root = tree.add_root(CompactString::new("C:"));
 
-        // A directory node with no modified time — should never appear.
-        let dir = tree.add_node(FileNode::new_dir(CompactString::new("OldDir"), Some(root)));
+        // A directory carrying a genuinely old timestamp: it must be rejected
+        // because it is a directory, not because it lacks a `modified` time
+        // (that case is covered by file_without_modified_is_ignored).
+        let mut dir_node = FileNode::new_dir(CompactString::new("OldDir"), Some(root));
+        dir_node.modified = Some(SystemTime::now() - Duration::from_secs(400 * 24 * 3600));
+        let dir = tree.add_node(dir_node);
         tree.add_child(root, dir);
         tree.aggregate_sizes();
 
